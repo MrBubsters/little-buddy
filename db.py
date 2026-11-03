@@ -251,6 +251,10 @@ def describe(item: dict) -> str:
     s = f"{icon} #{item['id']} [{item['kind']}/{item['category']}] {item['title']} — {when}"
     if item.get("gcal_id"):
         s += " 📆"
+    # Show the ping time when it isn't simply the default lead before the due time.
+    due = parse(item["due_at"])
+    if item.get("remind_at") and not item.get("reminded") and fmt(_default_remind(due, item["kind"])) != item["remind_at"]:
+        s += f" ⏰ {pretty(item['remind_at'])}"
     if item["recurrence"] != "none":
         s += f" (repeats {item['recurrence']})"
     if item["done"]:

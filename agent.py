@@ -70,7 +70,13 @@ async def _add_item(a: dict) -> str:
         if item:
             return "Saved to Google Calendar: " + db.describe(item)
         return f"Saved to Google Calendar: {a['title']} ({due}), beyond the {config.GCAL_SYNC_DAYS}-day sync window."
-    return "Saved: " + db.describe(db.add_item(**a, all_day=all_day))
+    saved = db.describe(db.add_item(**a, all_day=all_day))
+    if gcal.enabled():
+        return f"Saved in the bot only (NOT on Google Calendar; only events sync): {saved}"
+    return "Saved: " + saved
+
+
+WRITE_TOOLS = {"add_item", "update_item", "complete_item", "delete_item", "remember", "forget", "log_checkin"}
 
 
 async def _run_tool(name: str, args: dict) -> str:
@@ -152,6 +158,9 @@ Open items (overdue + next 3 days{"" if work_day else ", work hidden"}):
 
 Rules:
 - When the user mentions an event, deadline, task or reminder, call add_item. Resolve relative dates using the calendar above. Use 24h 'YYYY-MM-DD HH:MM'.
+- Choosing kind: something that HAPPENS at a date/time (party, dinner, appointment, meeting, trip, gathering) is an 'event'; events go to Google Calendar. A 'deadline' is when something is due. A 'task' is something to do. A 'reminder' is only a nudge to do something.
+- If the user describes an event AND something to prepare for it, call add_item TWICE: one 'event' for the occasion, and one 'task' (with remind_at) for the preparation.
+- Only say something is on Google Calendar if a tool result said "Saved to Google Calendar" or the item is marked 📆. If unsure, check with list_items. Never claim an action you did not take.
 - Always set category: 'work' for anything job-related (meetings, projects, deadlines, coworkers, on-call); 'social' for friends, family and events with others; 'personal' for errands, health, chores, bills and self-care.
 - When the user shares a lasting personal detail (names, routines, preferences, goals), call remember.
 - Use item ids from the lists when updating, completing or deleting. Call list_items to look further ahead.
@@ -190,7 +199,7 @@ async def chat(user_text: str) -> str:
     if config.OLLAMA_THINK is not None:
         kwargs["think"] = config.OLLAMA_THINK
 
-    reply = ""
+    reply, receipts = "", []
     for _ in range(MAX_TOOL_ROUNDS):
         resp = await client.chat(messages=messages, **kwargs)
         msg = resp.message
@@ -202,7 +211,13 @@ async def chat(user_text: str) -> str:
             result = await _run_tool(call.function.name, dict(call.function.arguments or {}))
             print(f"[tool] {call.function.name}({json.dumps(call.function.arguments)}) -> {result}")
             messages.append({"role": "tool", "content": result, "tool_name": call.function.name})
+            if call.function.name in WRITE_TOOLS:
+                receipts.append(result)
     reply = reply or "Done."
+    # Ground truth from the code, not the model: what was actually changed this turn.
+    # "-# " renders as small grey subtext in Discord.
+    if receipts:
+        reply += "\n" + "\n".join(f"-# ✔ {r}" for r in receipts)
 
     db.add_message("user", user_text)
     db.add_message("assistant", reply)
