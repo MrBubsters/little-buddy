@@ -115,6 +115,11 @@ async def gcal_loop():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} — model {config.OLLAMA_MODEL} @ {config.OLLAMA_HOST}")
+    print("[llm] loading model…")
+    try:
+        print("[llm]", await agent.warm_up())
+    except Exception as e:
+        print(f"[llm] warm-up failed: {e!r}")
     if gcal.enabled() and not gcal_loop.is_running():
         gcal_loop.start()  # first run is immediate, before reminders/digest go out
     elif config.GCAL_ENABLED:

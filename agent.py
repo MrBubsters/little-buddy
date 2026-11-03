@@ -160,6 +160,26 @@ Rules:
 - Never invent items. Confirm what you saved in one short line.{day_note}{waiting}"""
 
 
+async def warm_up() -> str:
+    """Check Ollama is reachable and the model exists, and load it into memory. Returns a status line."""
+    try:
+        models = {m.model for m in (await client.list()).models}
+    except Exception as e:
+        return f"✗ Ollama not reachable at {config.OLLAMA_HOST} ({e.__class__.__name__}). Is it running?"
+    if config.OLLAMA_MODEL not in models and f"{config.OLLAMA_MODEL}:latest" not in models:
+        return f"✗ Model '{config.OLLAMA_MODEL}' not downloaded. Run: ollama pull {config.OLLAMA_MODEL}"
+    # An empty prompt makes Ollama load the model without generating anything.
+    await client.generate(model=config.OLLAMA_MODEL, prompt="", keep_alive=config.OLLAMA_KEEP_ALIVE,
+                          options={"num_ctx": config.OLLAMA_NUM_CTX})
+    loaded = {m.model: m for m in (await client.ps()).models}
+    m = loaded.get(config.OLLAMA_MODEL) or loaded.get(f"{config.OLLAMA_MODEL}:latest")
+    if not m:
+        return f"✓ Model '{config.OLLAMA_MODEL}' ready"
+    vram = (m.size_vram or 0) / 1e9
+    where = "100% GPU" if m.size_vram and m.size_vram >= m.size else f"{vram:.1f} GB on GPU, rest on CPU (slow!)"
+    return f"✓ Model '{config.OLLAMA_MODEL}' loaded: {m.size / 1e9:.1f} GB, {where}"
+
+
 async def chat(user_text: str) -> str:
     messages = [{"role": "system", "content": _system_prompt()}]
     messages += db.recent_messages(config.HISTORY_MESSAGES)
