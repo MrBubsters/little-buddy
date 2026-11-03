@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+BOT_NAME = os.getenv("BOT_NAME", "Buddy")  # what the assistant calls itself
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
 # Optional server channel for chatting + reminders. 0 = DMs only.

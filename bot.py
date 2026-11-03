@@ -19,7 +19,7 @@ intents.message_content = True
 bot = discord.Client(intents=intents)
 llm_lock = asyncio.Lock()  # one LLM request at a time — keeps VRAM use flat
 
-HELP = """**Jarofass** — just talk to me normally, e.g.
+HELP = f"""**{config.BOT_NAME}** — just talk to me normally, e.g.
 • "dentist next tuesday at 3pm"
 • "project report due friday 5pm, remind me thursday evening"
 • "gym every weekday at 7am"

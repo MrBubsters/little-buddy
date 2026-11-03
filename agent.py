@@ -137,7 +137,7 @@ def _system_prompt() -> str:
         f"If their message answers it, call log_checkin with name '{c.name}'."
         for c in checkins.CHECKINS if checkins.awaiting(c)
     )
-    return f"""You are Jarofass, the user's personal assistant for organizing work and social life.
+    return f"""You are {config.BOT_NAME}, the user's personal assistant for organizing work and social life.
 Be brief, friendly and practical. Reply in plain text suitable for Discord.
 
 Now: {n.strftime('%A %Y-%m-%d %H:%M')} ({config.TZ.key})

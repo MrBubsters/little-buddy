@@ -1,0 +1,19 @@
+# systemd unit for Linux. Install from the project folder (see docs/install-linux.md):
+#   sed "s|__USER__|$USER|; s|__DIR__|$PWD|g" deploy/little-buddy.service | sudo tee /etc/systemd/system/little-buddy.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now little-buddy
+[Unit]
+Description=little-buddy Discord assistant
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,75 +1,190 @@
-# Jarofass — local personal assistant on Discord
+# little-buddy
 
-A private Discord bot backed by a **local LLM (Ollama)** that keeps context about your life
-(facts, events, deadlines, tasks) in SQLite and pings you with reminders and a morning digest.
-No API keys or token costs.
+**A private personal assistant that lives in your Discord DMs and runs on your own computer.**
 
+Tell it about your life in plain language ("dentist next Tuesday at 3", "report due Friday 5pm",
+"my sister's birthday is March 4") and it keeps track, reminds you, sends you a morning agenda,
+checks in on your workday, and syncs with Google Calendar.
+
+The AI model runs **locally** through [Ollama](https://ollama.com). No OpenAI/Anthropic account,
+no API keys, no per-message costs, and your conversations never leave your machine (apart from
+Discord itself delivering the messages, and Google Calendar if you enable it).
+
+---
+
+## Features
+- 💬 **Natural-language chat:** add, change, complete and delete events, deadlines, tasks and reminders. Understands "next Friday", "every weekday at 7", etc.
+- 🧠 **Remembers you:** stores lasting facts (people, routines, preferences) and uses them as context.
+- ⏰ **Reminders:** @mentions you before things happen. Supports daily/weekday/weekly/monthly/yearly repeats.
+- ☀️ **Morning digest:** today's agenda, overdue items and the next few days.
+- 📝 **Daily work check-in:** asks what you got done and keeps asking until you answer. Ask "what did I do this week?" later.
+- 💼 **Work/life separation:** items are tagged work 💼, social 🎉 or personal 🏠; work stays out of your weekends.
+- 📆 **Google Calendar sync (optional):** two-way, with your own free Google API credentials.
+- 🖥️ **Runs anywhere:** Windows, Linux (incl. headless servers as a service), macOS. GPU recommended, CPU works.
+
+## How it works
 ```
-Discord DM ──► bot.py ──► agent.py ──► Ollama (qwen3:8b, local GPU)
-                 │            │ tool calls
-                 │            ▼
-                 └──────► db.py (SQLite: items, facts, chat history)
-   scheduler (30s): due reminders + daily digest — plain code, no LLM
+ You (Discord DM) ──► bot.py ──► agent.py ──► Ollama (local AI model on your GPU)
+                         │            │  the model calls "tools" to save/update/list things
+                         │            ▼
+                         ├──────► db.py ── SQLite database (data/jarofass.db)
+                         └──────► gcal.py ◄──► Google Calendar (optional, every 5 min)
+
+ Scheduler (every 30 s): reminders, morning digest, check-ins. Plain code, no AI needed.
 ```
 
-## Hardware sizing (target: 8GB GPU)
-| Model | VRAM (Q4, 6k ctx) | Notes |
+---
+
+## Quick start
+You'll need about 30 minutes for the first setup.
+
+| Step | Guide |
+|---|---|
+| 1. Create your Discord bot and get its token + your user ID | [docs/discord-setup.md](docs/discord-setup.md) |
+| 2. Install Ollama, the code and its dependencies, then configure `.env` | [Windows](docs/install-windows.md) · [Linux / macOS](docs/install-linux.md) |
+| 3. *(Optional)* Connect Google Calendar | [docs/google-calendar-setup.md](docs/google-calendar-setup.md) |
+| 4. Start the bot and DM it `!help` | in the install guides |
+
+Already running it and switching computers? See [docs/moving-machines.md](docs/moving-machines.md).
+
+### Requirements
+- Python **3.10+**
+- [Ollama](https://ollama.com)
+- A Discord account
+- Disk: ~3–10 GB for the model
+- Recommended: NVIDIA GPU with 6 GB+ VRAM, or an Apple Silicon Mac
+
+## Choosing a model
+The model must support **tool calling**. Pick by your GPU's memory (VRAM), set `OLLAMA_MODEL` in
+`.env`, and `ollama pull` it.
+
+| Your hardware | `OLLAMA_MODEL` | `OLLAMA_NUM_CTX` | Notes |
+|---|---|---|---|
+| No GPU (CPU only, 16 GB+ RAM) | `qwen3:4b` | `4096` | Works; replies take 10–60 s |
+| 6 GB GPU | `qwen3:4b` | `6144` | Fast, decent accuracy |
+| **8 GB GPU** | **`qwen3:8b`** (default) | `6144` | Good balance; uses ~6.5 GB |
+| 12 GB+ GPU | `qwen3:8b` | `8192` | Or try `qwen3:14b` for better accuracy |
+| 16 GB+ GPU / Apple Silicon 16 GB+ | `qwen3:14b` | `8192` | Best accuracy of these |
+
+**Check it fits:** while the bot is replying, run `ollama ps`. The *PROCESSOR* column should say
+**100% GPU**. A CPU/GPU split means it's too big: lower `OLLAMA_NUM_CTX` or pick a smaller model.
+
+Reminders, the digest and check-ins don't use the model, so they're instant regardless.
+
+---
+
+## Using it
+Just DM the bot like you'd text a person:
+
+> dentist next tuesday at 3pm
+> project report due friday 5pm, remind me thursday evening
+> gym every weekday at 7am
+> remember my manager's name is Priya
+> move the dentist to wednesday
+> what's on this week?
+> what did I get done at work this week?
+
+The bot confirms what it saved, e.g. `🏠 #12 [event/personal] Dentist — Tue Nov 10 15:00`. The
+`#12` is the item's ID, so you can say "delete #12" or "mark #12 done".
+
+### Commands
+These answer instantly without using the AI:
+
+| Command | What it does |
+|---|---|
+| `!agenda` | Overdue items + the next 3 days (`!agenda all` includes work on days off) |
+| `!week` | Same for 7 days (`!week all`) |
+| `!facts` | What the bot remembers about you |
+| `!update <text>` | Log today's work update |
+| `!skip` | Skip today's check-ins (vacation, sick day) |
+| `!worklog` | Your work updates from the last 7 days |
+| `!sync` | Sync Google Calendar right now |
+| `!reset` | Clear chat history (your items and facts are kept) |
+| `!help` | Show help |
+
+### Scheduled messages
+All of these @mention you so Discord sends a notification.
+
+| Message | When | Settings |
 |---|---|---|
-| `qwen3:8b` (default) | ~6.5 GB | Best date/tool-call accuracy that fits 8GB |
-| `qwen3:4b` | ~3.5 GB | Fallback if the 8B spills to CPU (check `ollama ps`) |
+| ☀️ Morning digest | Daily | `DIGEST_TIME` |
+| ⏰ Reminder | Before each item (default 30 min) | `REMIND_LEAD_MINUTES`, or say "remind me at …" |
+| 📝 Work check-in | Work days, re-asks until answered | `WORK_CHECKIN_TIME`, `_UNTIL`, `_NAG_MINUTES`, `_DAYS` |
 
-`ollama ps` should show **100% GPU**. If it shows a CPU/GPU split, lower `OLLAMA_NUM_CTX` to 4096
-or switch to `qwen3:4b`. Reminders and the digest never touch the LLM, so they're instant either way.
+Answer a check-in by **replying** to it in Discord, with `!update …`, or just by telling the bot.
 
-## Setup
-1. **Ollama**: install from https://ollama.com, then `ollama pull qwen3:8b`.
-2. **Discord bot**: https://discord.com/developers/applications → New Application → *Bot*:
-   - Reset Token → copy it.
-   - Enable **Message Content Intent**.
-   - *OAuth2 → URL Generator*: scope `bot`, permissions `Send Messages`, `Read Message History`.
-     Open the URL and add it to a server you're in (needed so it can DM you).
-3. **Config**: copy `.env.example` to `.env`, fill in `DISCORD_TOKEN`, `OWNER_ID`, `TIMEZONE`.
-4. **Run**:
-   ```
-   python -m venv .venv
-   .venv\Scripts\pip install -r requirements.txt
-   .venv\Scripts\python bot.py
-   ```
-   or just `start.bat`.
+**Days off:** outside `WORK_DAYS`, work items are hidden from the digest and agenda and work
+reminders wait until the next work morning.
 
-## Google Calendar sync (optional)
-Two-way sync for **events**: Google → bot every 5 min (next 30 days, shown with 📆), and events you
-create/edit/delete through the bot are written to Google. Tasks, deadlines and reminders stay local.
+### Categories
+| Icon | Category | Examples |
+|---|---|---|
+| 💼 | work | meetings, projects, deadlines, coworkers |
+| 🎉 | social | friends, family, parties, dinners |
+| 🏠 | personal | errands, health, bills, chores |
 
-1. https://console.cloud.google.com → create a project (e.g. "Jarofass").
-2. *APIs & Services → Library* → enable **Google Calendar API**.
-3. *Google Auth Platform* (OAuth consent screen) → External → fill app name + your email →
-   under *Audience* add yourself as a test user, then click **Publish app** (→ In production).
-   Unpublished "Testing" apps get tokens that expire every 7 days. You'll see an "unverified app"
-   warning when authorizing; that's expected for a personal app (Advanced → Go to Jarofass).
-4. *Clients* → Create client → **Desktop app** → download JSON → save as `data/credentials.json`.
-5. Run once: `.venv\Scripts\python gcal.py`, which opens the browser, writes `data/token.json` and lists upcoming events.
-6. Set `GCAL_ENABLED=true` in `.env` and restart the bot. `!sync` forces a sync.
+📆 marks items synced with Google Calendar.
 
-For the server PC, copy `data/credentials.json` and `data/token.json` along with the DB.
-Limitations: one calendar (`GCAL_CALENDAR_ID`); editing/deleting a recurring event through the bot
-affects only that occurrence. Change the whole series in Google Calendar.
+---
 
-## Usage
-DM the bot naturally: "dentist next tue 3pm", "report due friday 5pm, remind me thursday 6pm",
-"gym every weekday 7am", "remember my manager is Priya".
+## Configuration
+All settings live in `.env`. Copy `.env.example`; every option is explained there. The essentials:
 
-Commands (instant, no LLM): `!agenda` `!week` `!facts` `!digest` `!sync` `!reset` `!help`
+| Setting | Required | Example |
+|---|---|---|
+| `DISCORD_TOKEN` | ✅ | from [Discord setup](docs/discord-setup.md) |
+| `OWNER_ID` | ✅ | your Discord user ID |
+| `TIMEZONE` | recommended | `America/Chicago` ([list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
+| `BOT_NAME` | | `Buddy` |
+| `OLLAMA_MODEL` | | see [Choosing a model](#choosing-a-model) |
+| `GCAL_ENABLED` | | `true` after [Google setup](docs/google-calendar-setup.md) |
 
-### Scheduled messages (all @mention you)
-- **Morning digest** at `DIGEST_TIME`.
-- **Reminders** for items with a reminder time.
-- **Work check-in** Mon–Fri at `WORK_CHECKIN_TIME` (14:30): "what did you get done?" Re-asks every
-  `WORK_CHECKIN_NAG_MINUTES` until you answer, up to `WORK_CHECKIN_UNTIL`. Answer by replying to the
-  message, `!update <text>`, or just telling the bot. `!skip` skips today (PTO/sick), `!worklog` shows
-  the last 7 days, or ask "what did I get done this week?". More check-ins: add to `CHECKINS` in `checkins.py`.
+Restart the bot after editing `.env`.
 
-## Deploying to the other PC
-Copy the folder (without `.venv`), recreate the venv, copy `.env` and `data/jarofass.db`.
-To auto-start, add a Task Scheduler task "At log on" running `start.bat`.
-Note: keep `data/` out of OneDrive sync on the server, since sync can lock SQLite files (set `DB_PATH`).
+### Customizing
+- **More check-ins** (evening journal, Friday review…): add an entry to `CHECKINS` in `checkins.py`.
+- **Personality / rules:** edit the system prompt in `_system_prompt()` in `agent.py`.
+- **Ollama on another machine:** set `OLLAMA_HOST=http://that-machine:11434` (and on that machine,
+  set the environment variable `OLLAMA_HOST=0.0.0.0` so Ollama accepts network connections).
+
+## Project layout
+| File | Purpose |
+|---|---|
+| `bot.py` | Discord connection, commands, scheduler (reminders/digest/check-ins) |
+| `agent.py` | Talks to Ollama; defines the tools the AI can use; builds the prompt |
+| `db.py` | SQLite storage, dates, repeats |
+| `gcal.py` | Google Calendar sync; run directly once to authorize |
+| `checkins.py` | Scheduled check-in questions |
+| `config.py` | Reads `.env` |
+| `start.bat` / `start.sh` | Launchers (create the venv on first run) |
+| `deploy/little-buddy.service` | systemd service for Linux |
+| `data/` | Your database and Google credentials. **Private, git-ignored** |
+
+---
+
+## Troubleshooting
+| Symptom | Fix |
+|---|---|
+| `No time zone found with key …` | You ran the system Python. Use `.venv\Scripts\python` (Windows) or `.venv/bin/python` (Linux/macOS) |
+| `ModuleNotFoundError` | Same: use the venv's Python, or rerun `pip install -r requirements.txt` in it |
+| Bot is online but never replies | Enable **Message Content Intent**; check `OWNER_ID` is *your* ID ([Discord setup](docs/discord-setup.md#test-it)) |
+| "Couldn't reach the local model" | Ollama isn't running. Windows: start the Ollama app. Linux: `sudo systemctl start ollama` |
+| `model "…" not found` | `ollama pull <OLLAMA_MODEL>` |
+| Replies are very slow | Model doesn't fit your GPU. See [Choosing a model](#choosing-a-model) |
+| Wrong dates or times | Set `TIMEZONE` correctly; for repeated mistakes try a larger model |
+| Bot saved something wrong | Tell it ("that should be 4pm, not 3") or "delete #ID" |
+| Double reminders | Two copies of the bot are running (e.g. old + new computer). Stop one |
+| `database is locked` | Database is in a cloud-synced folder. Set `DB_PATH` to a local path |
+| Google problems | See [Google troubleshooting](docs/google-calendar-setup.md#troubleshooting) |
+| New setting has no effect | Restart the bot; check the line exists in `.env` (compare with `.env.example` after updating) |
+
+## Privacy
+- The AI runs on your machine; conversations aren't sent to any AI company.
+- Messages pass through **Discord** (it's the chat app), and calendar events through **Google** if enabled.
+- Everything the bot knows is in `data/jarofass.db` on your computer. Delete it to start fresh.
+- Keep `.env` and `data/` private. They're git-ignored by default.
+
+## Limitations
+- One reminder time per item.
+- One Google calendar synced; editing a recurring Google event through the bot changes only that occurrence.
+- Small local models occasionally misread dates. The bot always confirms what it saved, so glance at its reply.
