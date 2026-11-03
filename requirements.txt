@@ -1,0 +1,7 @@
+discord.py>=2.5
+ollama>=0.5
+python-dotenv>=1.0
+tzdata
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
