@@ -1,36 +1,48 @@
 # little-buddy
 
-**A private personal assistant that lives in your Discord DMs and runs on your own computer.**
+**A private, general-purpose AI assistant that lives in your Discord DMs and runs on your own computer.**
 
-Tell it about your life in plain language ("dentist next Tuesday at 3", "report due Friday 5pm",
-"my sister's birthday is March 4") and it keeps track, reminds you, sends you a morning agenda,
-checks in on your workday, and syncs with Google Calendar.
+Talk to it like a capable friend: ask questions, think a problem through, get help writing, do quick
+math, save notes and ideas, and let it keep track of your life. "dentist next Tuesday at 3", "my
+sister's birthday is March 4", "every Friday at 5 ask me how the week went", "what's 18% of 64?".
+It reminds you, sends a morning agenda, checks in on your workday, can follow up on things by
+itself, and syncs with Google Calendar.
 
-The AI model runs **locally** through [Ollama](https://ollama.com). No OpenAI/Anthropic account,
-no API keys, no per-message costs, and your conversations never leave your machine (apart from
-Discord itself delivering the messages, and Google Calendar if you enable it).
+The AI model runs **locally** through [Ollama](https://ollama.com) (or any OpenAI-compatible
+server). No account, no API keys, no per-message costs, and your conversations never leave your
+machine (apart from Discord delivering the messages, and Google Calendar or web search if you turn them on).
+
+It's built to grow: abilities are **skills** you can add as plain Python files, and the
+assistant automatically uses more of whatever hardware you give it.
 
 ---
 
 ## Features
-- 💬 **Natural-language chat:** add, change, complete and delete events, deadlines, tasks and reminders. Understands "next Friday", "every weekday at 7", etc.
-- 🧠 **Remembers you:** stores lasting facts (people, routines, preferences) and uses them as context.
-- ⏰ **Reminders:** @mentions you before things happen. Supports daily/weekday/weekly/monthly/yearly repeats.
-- ☀️ **Morning digest:** today's agenda, overdue items and the next few days.
-- 📝 **Daily work check-in:** asks what you got done and keeps asking until you answer. Ask "what did I do this week?" later.
-- 💼 **Work/life separation:** items are tagged work 💼, social 🎉 or personal 🏠; work stays out of your weekends.
+- 💬 **General conversation:** questions, explanations, brainstorming, writing and editing, honest opinions.
+- 🧠 **Memory:** remembers lasting facts about you and keeps longer notes (recipes, ideas, meeting notes), with search. Only what's relevant to the current message goes into the prompt, so it scales.
+- 🔁 **Follows up by itself:** "in an hour, check whether I finished the report", "every Monday at 9 ask what my top priority is". The assistant schedules its own jobs and carries them out later.
+- 🧮 **Exact math:** a calculator tool for bills, budgets, conversions and percentages.
+- 📅 **Planner:** events, deadlines, tasks and reminders in plain language ("next Friday", "every weekday at 7"), repeats, a morning digest, and work/life separation (work 💼 stays out of your weekends).
+- 📝 **Daily work check-in:** asks what you got done and keeps asking until you answer.
 - 📆 **Google Calendar sync (optional):** two-way, with your own free Google API credentials.
+- 🌐 **Web search (optional, off by default):** looks things up and reads pages.
+- 🧩 **Skills:** drop a Python file in `skills/` to add tools, commands, live context or scheduled behaviour. See [docs/writing-skills.md](docs/writing-skills.md).
 - 🖥️ **Runs anywhere:** Windows, Linux (incl. headless servers as a service), macOS. GPU recommended, CPU works.
 
 ## How it works
 ```
- You (Discord DM) ──► bot.py ──► agent.py ──► Ollama (local AI model on your GPU)
-                         │            │  the model calls "tools" to save/update/list things
-                         │            ▼
-                         ├──────► db.py ── SQLite database (data/jarofass.db)
-                         └──────► gcal.py ◄──► Google Calendar (optional, every 5 min)
-
- Scheduler (every 30 s): reminders, morning digest, check-ins. Plain code, no AI needed.
+ You (Discord DM) ──► bot.py ─┐        (or cli.py in a terminal)
+                              ▼
+          core/agent.py  builds a prompt that fits the context window:
+                         persona + skill context + relevant memories + recent chat,
+                         then lets the model think and call tools, step by step
+                              │
+          core/llm.py   ──► Ollama / any OpenAI-compatible server
+          core/tools.py ──► tools from skills/  (planner, memory, jobs, check-ins, web, ...)
+          core/memory.py    facts + notes, full-text (and optional embedding) search
+          core/scheduler.py every 30 s: skill hooks (reminders, digest, check-ins, calendar sync)
+                            + jobs the assistant scheduled for itself
+          core/db.py        SQLite database (data/jarofass.db)
 ```
 
 ---
@@ -56,7 +68,9 @@ Already running it and switching computers? See [docs/moving-machines.md](docs/m
 
 ## Choosing a model
 The model must support **tool calling**. Pick by your GPU's memory (VRAM), set `OLLAMA_MODEL` in
-`.env`, and `ollama pull` it.
+`.env`, and `ollama pull` it. The context size (`OLLAMA_NUM_CTX`) matters as much as the model:
+tool definitions, memories and chat history are all budgeted to fit it, so a bigger context means
+more memory and longer conversations. `!status` shows where it goes.
 
 | Your hardware | `OLLAMA_MODEL` | `OLLAMA_NUM_CTX` | Notes |
 |---|---|---|---|
@@ -71,11 +85,29 @@ The model must support **tool calling**. Pick by your GPU's memory (VRAM), set `
 
 Reminders, the digest and check-ins don't use the model, so they're instant regardless.
 
+### Scaling up
+Nothing is tied to one model or one machine:
+
+| To get... | Set |
+|---|---|
+| A smarter model | `OLLAMA_MODEL` (bigger model) and `OLLAMA_NUM_CTX` (more memory and history per message) |
+| A model on another computer or server | `OLLAMA_HOST=http://that-machine:11434` |
+| llama.cpp, LM Studio, vLLM or a cloud API instead of Ollama | `LLM_PROVIDER=openai`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` |
+| Faster side jobs | `LLM_FAST_MODEL` (a small model for rewrites and summaries) |
+| Search memory by meaning, not just keywords | `EMBED_MODEL=nomic-embed-text` (then `ollama pull nomic-embed-text`) |
+| Parallel requests on a server that can batch | `LLM_CONCURRENCY` |
+| Longer multi-step tasks | `LLM_MAX_STEPS` |
+
 ---
 
 ## Using it
 Just DM the bot like you'd text a person:
 
+> how do I explain recursion to a 10 year old?
+> we're splitting a $187.40 bill 3 ways plus 20% tip, what do we each owe?
+> every friday at 5pm ask me how my week went
+> in 2 hours check whether I finished the demo slides
+> save a note: pasta sauce recipe, ...
 > dentist next tuesday at 3pm
 > project report due friday 5pm, remind me thursday evening
 > gym every weekday at 7am
@@ -88,18 +120,21 @@ The bot confirms what it saved, e.g. `🏠 #12 [event/personal] Dentist — Tue 
 `#12` is the item's ID, so you can say "delete #12" or "mark #12 done".
 
 ### Commands
-These answer instantly without using the AI:
+These answer instantly without using the AI (`!help` lists them all, including ones skills add):
 
 | Command | What it does |
 |---|---|
 | `!agenda` | Overdue items + the next 3 days (`!agenda all` includes work on days off) |
 | `!week` | Same for 7 days (`!week all`) |
-| `!facts` | What the bot remembers about you |
+| `!facts` | What the bot remembers about you (`!facts notes` for saved notes) |
+| `!jobs` | Follow-ups and recurring jobs the assistant scheduled for itself |
 | `!update <text>` | Log today's work update |
 | `!skip` | Skip today's check-ins (vacation, sick day) |
 | `!worklog` | Your work updates from the last 7 days |
 | `!sync` | Sync Google Calendar right now |
-| `!reset` | Clear chat history (your items and facts are kept) |
+| `!status` | Model, backend, loaded skills, and how the context window is used |
+| `!skills` | Loaded skills and their tools |
+| `!reset` | Clear chat history (your items, memories and jobs are kept) |
 | `!help` | Show help |
 
 ### Scheduled messages
@@ -109,6 +144,7 @@ All of these @mention you so Discord sends a notification.
 |---|---|---|
 | ☀️ Morning digest | Daily | `DIGEST_TIME` |
 | ⏰ Reminder | Before each item (default 30 min) | `REMIND_LEAD_MINUTES`, or say "remind me at …" |
+| ⚙️ Jobs | Whenever you asked ("every Friday at 5…", "in an hour…") | `!jobs` to list; ask it to cancel one |
 | 📝 Work check-in | Work days, re-asks until answered | `WORK_CHECKIN_TIME`, `_UNTIL`, `_NAG_MINUTES`, `_DAYS` |
 
 Answer a check-in by **replying** to it in Discord, with `!update …`, or just by telling the bot.
@@ -137,28 +173,38 @@ All settings live in `.env`. Copy `.env.example`; every option is explained ther
 | `TIMEZONE` | recommended | `America/Chicago` ([list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
 | `BOT_NAME` | | `Buddy` |
 | `OLLAMA_MODEL` | | see [Choosing a model](#choosing-a-model) |
+| `OWNER_NAME` | | your first name, so it doesn't call you "the user" |
+| `WEB_ENABLED` | | `true` to allow web search |
 | `GCAL_ENABLED` | | `true` after [Google setup](docs/google-calendar-setup.md) |
 
 Restart the bot after editing `.env`.
 
 ### Customizing
-- **More check-ins** (evening journal, Friday review…): add an entry to `CHECKINS` in `checkins.py`.
-- **Personality / rules:** edit the system prompt in `_system_prompt()` in `agent.py`.
+- **Personality / standing instructions:** copy [docs/persona.example.md](docs/persona.example.md) to `data/persona.md` and edit it. No code or restart needed.
+- **New abilities:** add a skill. See [docs/writing-skills.md](docs/writing-skills.md). Turn skills off with `SKILLS_DISABLED`.
+- **More check-ins** (evening journal, Friday review…): add an entry to `CHECKINS` in `skills/checkins.py`, or just ask the assistant ("every evening at 9 ask me what I'm grateful for").
 - **Ollama on another machine:** set `OLLAMA_HOST=http://that-machine:11434` (and on that machine,
   set the environment variable `OLLAMA_HOST=0.0.0.0` so Ollama accepts network connections).
 
 ## Project layout
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `bot.py` | Discord connection, commands, scheduler (reminders/digest/check-ins) |
-| `agent.py` | Talks to Ollama; defines the tools the AI can use; builds the prompt |
-| `db.py` | SQLite storage, dates, repeats |
-| `gcal.py` | Google Calendar sync; run directly once to authorize |
-| `checkins.py` | Scheduled check-in questions |
+| `bot.py` | Discord front-end: routes messages to commands or the agent, delivers notifications |
+| `cli.py` | Terminal front-end for trying things without Discord (`python cli.py "hello"`) |
+| `core/agent.py` | The agent loop and prompt builder (persona, skill context, memory, history, budgets) |
+| `core/llm.py` | Model backends (Ollama, OpenAI-compatible) |
+| `core/tools.py` | Tool registry: turns Python functions into tools |
+| `core/skills.py` | Skill loader and hooks |
+| `core/memory.py` | Facts and notes with search |
+| `core/scheduler.py` | 30-second heartbeat and self-scheduled jobs |
+| `core/style.py` | Reply style per mode (text, scheduled, or ones a front-end registers) |
+| `core/db.py` | SQLite connection, time parsing, chat history |
+| `skills/` | Abilities: `planner/` (items, digest, Google Calendar), `checkins`, `memory`, `jobs`, `utilities`, `web`, `system` |
+| `tests/` | Engine tests with a fake model: `python -m unittest discover tests` |
 | `config.py` | Reads `.env` |
 | `start.bat` / `start.sh` | Launchers (create the venv on first run) |
 | `deploy/little-buddy.service` | systemd service for Linux |
-| `data/` | Your database and Google credentials. **Private, git-ignored** |
+| `data/` | Your database, persona and Google credentials. **Private, git-ignored** |
 
 ---
 
@@ -171,6 +217,8 @@ Restart the bot after editing `.env`.
 | "Couldn't reach the local model" | Ollama isn't running. Windows: start the Ollama app. Linux: `sudo systemctl start ollama` |
 | `model "…" not found` | `ollama pull <OLLAMA_MODEL>` |
 | Replies are very slow | Model doesn't fit your GPU. See [Choosing a model](#choosing-a-model) |
+| "context is tight" in the console | Too many tools for the context size: raise `OLLAMA_NUM_CTX`, or turn skills off with `SKILLS_DISABLED` |
+| A skill doesn't show up | `!skills` lists load errors; set `SKILLS_DEBUG=1` for the full traceback |
 | Wrong dates or times | Set `TIMEZONE` correctly; for repeated mistakes try a larger model |
 | Bot saved something wrong | Tell it ("that should be 4pm, not 3") or "delete #ID" |
 | Double reminders | Two copies of the bot are running (e.g. old + new computer). Stop one |
@@ -179,12 +227,14 @@ Restart the bot after editing `.env`.
 | New setting has no effect | Restart the bot; check the line exists in `.env` (compare with `.env.example` after updating) |
 
 ## Privacy
-- The AI runs on your machine; conversations aren't sent to any AI company.
+- The AI runs on your machine; conversations aren't sent to any AI company (unless you point `LLM_PROVIDER` at a cloud API).
+- Web search is off by default. With `WEB_ENABLED=true`, search queries go to DuckDuckGo and pages are fetched from their sites.
 - Messages pass through **Discord** (it's the chat app), and calendar events through **Google** if enabled.
 - Everything the bot knows is in `data/jarofass.db` on your computer. Delete it to start fresh.
 - Keep `.env` and `data/` private. They're git-ignored by default.
 
 ## Limitations
 - One reminder time per item.
+- Small local models sometimes misjudge when to use a tool. Bigger models (see [Scaling up](#scaling-up)) are noticeably better at multi-step requests.
 - One Google calendar synced; editing a recurring Google event through the bot changes only that occurrence.
 - Small local models occasionally misread dates. The bot always confirms what it saved, so glance at its reply.

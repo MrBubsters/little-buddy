@@ -63,7 +63,7 @@ Moving from another computer? Copy your existing `.env` and `data/` instead; see
 Follow [Google Calendar setup](google-calendar-setup.md).
 
 The one-time authorization opens a web browser. On a **desktop**, run
-`.venv/bin/python gcal.py` here as described. On a **headless server**, do the authorization on any
+`.venv/bin/python -m skills.planner.gcal` here as described. On a **headless server**, do the authorization on any
 computer with a browser (e.g. your Windows/Mac machine with the project cloned), then copy
 `data/credentials.json` and `data/token.json` into `~/little-buddy/data/` on the server.
 

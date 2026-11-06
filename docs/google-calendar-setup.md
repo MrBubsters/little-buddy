@@ -77,9 +77,9 @@ From the project folder, with the virtual environment's Python:
 
 ```bash
 # Windows
-.venv\Scripts\python gcal.py
+.venv\Scripts\python -m skills.planner.gcal
 # Linux / macOS
-.venv/bin/python gcal.py
+.venv/bin/python -m skills.planner.gcal
 ```
 
 1. A browser tab opens. Choose your Google account.
@@ -126,7 +126,7 @@ No need to authorize again: the token refreshes itself.
 | `Error 403: access_denied` ("has not completed the Google verification process") | App is in **Testing** and you're not a test user. Step 3: **Publish app**, or add yourself under **Test users** |
 | Sync stopped working after ~7 days (`invalid_grant`) | App was in Testing. Publish it, delete `data/token.json`, rerun step 5 |
 | `Missing data/credentials.json` | Step 4: file must be named exactly `credentials.json` and be inside `data/` |
-| `Google Calendar not authorized. Run: …gcal.py` | `data/token.json` missing; do step 5 |
+| `Google Calendar not authorized. Run: …skills.planner.gcal` | `data/token.json` missing; do step 5 |
 | `No time zone found with key …` | You ran system Python. Use `.venv\Scripts\python` / `.venv/bin/python` |
 | Events created through the bot don't appear in Google | `GCAL_ENABLED=true` missing from `.env`, or the bot wasn't restarted. Events saved while sync was off are uploaded automatically on the next sync |
 | `!sync` says "isn't set up" | Same as above: check `GCAL_ENABLED` and that `data/token.json` exists |
