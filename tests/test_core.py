@@ -24,6 +24,7 @@ from core.llm import Reply  # noqa: E402
 from core.tools import REGISTRY, ToolContext, build_tool  # noqa: E402
 
 skills.load()
+from skills.planner import store  # noqa: E402  (after load: the skill creates its tables)
 
 
 class FakeLLM(llm.Provider):
@@ -159,6 +160,23 @@ class AgentTest(unittest.TestCase):
         self.assertIn("Scheduled", reply)
         self.assertIn("System check", fake.calls[1]["messages"][-1]["content"])
 
+    def test_unbacked_claim_gets_one_nudge(self):
+        run(REGISTRY.run("add_item", {"title": "Backlog review", "kind": "task", "category": "work"}, ToolContext()))
+        fake = FakeLLM(Reply("Got it! I've updated your task status."),
+                       Reply("", [call("complete_item", item="backlog review")]),
+                       Reply("Marked the backlog review done."))
+        llm.set_provider(fake)
+        reply = run(agent.chat("we finished the backlog review", ToolContext(conversation="c")))
+        self.assertIn("System check", fake.calls[1]["messages"][-1]["content"])
+        self.assertIn("-# ✔ Done:", reply)
+
+    def test_no_claim_nudge_for_logged_checkin_or_plain_reply(self):
+        for text, answer in (("[work update logged] shipped it", "I've logged it, nice work!"), ("hi", "Hey!")):
+            fake = FakeLLM(Reply(answer))
+            llm.set_provider(fake)
+            run(agent.chat(text, ToolContext(conversation="c2")))
+            self.assertEqual(len(fake.calls), 1, text)
+
     def test_history_is_budgeted(self):
         for i in range(30):
             db.add_message("user", f"message {i} " + "x" * 2000, "big")
@@ -263,8 +281,46 @@ class PlannerTest(unittest.TestCase):
         self.assertTrue(out.startswith("Saved:"), out)
         item_id = int(out.split("#")[1].split()[0])
         self.assertIn("Dentist", run(REGISTRY.run("list_items", {}, ToolContext())))
-        self.assertIn("✅", run(REGISTRY.run("complete_item", {"id": item_id}, ToolContext())))
-        self.assertIn("Error", run(REGISTRY.run("delete_item", {"id": 99999}, ToolContext())))
+        self.assertIn("✅", run(REGISTRY.run("complete_item", {"item": f"#{item_id}"}, ToolContext())))
+        self.assertIn("Error", run(REGISTRY.run("delete_item", {"item": 99999}, ToolContext())))
+
+    def test_items_found_by_description(self):
+        def add(title):
+            return run(REGISTRY.run("add_item", {"title": title, "kind": "task", "category": "work"}, ToolContext()))
+        add("PRX-558 Update Go Links")
+        add("Demo the Dayton skills")
+        add("Review migration docs")
+        add("Update migration skill tickets")
+        self.assertIn("Demo the Dayton skills", run(REGISTRY.run("complete_item", {"item": "the demo"}, ToolContext())))
+        self.assertIn("Go Links", run(REGISTRY.run("update_item", {"item": "PRX-558", "notes": "PR open"},
+                                                   ToolContext())))
+        ambiguous = run(REGISTRY.run("complete_item", {"item": "migration"}, ToolContext()))
+        self.assertIn("several", ambiguous)
+        self.assertIn("no open item", run(REGISTRY.run("complete_item", {"item": "zebra wrangling"}, ToolContext())))
+        self.assertEqual(len(store.find_open("migration")), 2)  # nothing was completed by mistake
+
+    def test_dates_are_labelled_relative_to_today(self):
+        n = db.now()
+        soon = store.add_item("Birthday party", "event", db.fmt(n + timedelta(days=1)), category="social")
+        old = store.add_item("Team lunch", "event", db.fmt(n - timedelta(days=2)), category="work")
+        self.assertIn("(tomorrow)", store.describe(soon))
+        self.assertIn("(2 days ago)", store.describe(old))
+        self.assertEqual(store.relative(db.fmt(n + timedelta(days=5))), "in 5 days")
+
+    def test_recap_only_has_what_happened(self):
+        n = db.now()
+        store.add_item("Concert next week", "event", db.fmt(n + timedelta(days=1)), category="social")
+        store.add_item("Standup yesterday", "event", db.fmt(n - timedelta(days=1)), category="work")
+        store.add_item("Still open thing", "task", category="work")
+        store.complete_item(store.add_item("Shipped the release", "task", category="work")["id"])
+        BY_NAME = skills.SKILLS["checkins"].BY_NAME
+        skills.SKILLS["checkins"].complete(BY_NAME["work"], "fixed the flaky test")
+        out = run(REGISTRY.run("recap", {"days": 7}, ToolContext()))
+        for want in ("Shipped the release", "Standup yesterday", "fixed the flaky test"):
+            self.assertIn(want, out)
+        for unwanted in ("Concert next week", "Still open thing"):
+            self.assertNotIn(unwanted, out)
+        self.assertNotIn("Shipped", run(REGISTRY.run("recap", {"category": "social"}, ToolContext())))
 
 
 if __name__ == "__main__":

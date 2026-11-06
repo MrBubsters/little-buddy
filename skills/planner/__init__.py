@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Annotated, Literal
 
 import config
-from core import db
+from core import db, skills
 from core.app import app
 from core.skills import command
 from core.tools import ToolContext, tool
@@ -30,7 +30,18 @@ Calendar). A 'deadline' is when something is due, a 'task' is something to do, a
 - category: 'work' for anything job-related; 'social' for friends, family and things with others; 'personal' \
 for errands, health, chores, bills and self-care.
 - If they describe an event AND something to prepare for it, add both: the event, and a task with remind_at.
-- Use item ids (#12) to update, complete or delete. Call list_items to look further ahead.
+- Ongoing work (projects, tickets, to-dos) goes here as one 'task' per piece of work, with no date unless \
+there's a deadline and its current status in notes. Never keep a task list in memory: memories can't be checked off.
+- When {owner} says something is finished (in passing, in a check-in, by name or description), call \
+complete_item for EACH open item it covers. They don't need to give an id: pass words from the title. When \
+a task progresses but isn't finished, update_item its notes.
+- The open items are the only source of truth for what's outstanding. To answer "what's left to do?", call \
+list_items (days_ahead 30) and answer from its result, not from memories or earlier chat.
+- For what {owner} did, finished or accomplished (today, this week, ...), call recap and answer only from its \
+result. Never present open tasks or upcoming events as accomplishments.
+- Every dated item says how far it is from today ("tomorrow", "2 days ago"). Trust those labels instead of \
+working out dates yourself.
+- Call list_items to look further ahead.
 - 📆 marks items synced with Google Calendar; changes to them update Google too. Only say something is on Google \
 Calendar if a tool result said so or it's marked 📆.
 - The schedule is one part of {owner}'s life, not the topic of every conversation. Bring it up when they ask, \
@@ -67,11 +78,18 @@ def list_items(days_ahead: int = 7, category: Category = None) -> str:
     return "\n".join(store.describe(i) for i in items) or "Nothing found."
 
 
-def _item(item_id: int) -> dict:
-    item = store.get_item(item_id)
-    if not item:
-        raise LookupError(f"no item #{item_id}")
-    return item
+ItemRef = Annotated[str, "The item's id ('#12'), or words from its title ('the demo', 'go links', 'PRX-558')."]
+
+
+def _item(ref: str) -> dict:
+    found = store.find_open(ref)
+    if len(found) == 1:
+        return found[0]
+    if found:
+        raise LookupError(f"'{ref}' matches several items. Call again with the id of the right one:\n"
+                          + "\n".join(store.describe(i) for i in found[:6]))
+    raise LookupError(f"no open item matches '{ref}'. Call list_items with days_ahead 60 to see them; "
+                      f"if it was never saved, say so instead of claiming it's updated.")
 
 
 def _synced(item: dict) -> bool:
@@ -79,10 +97,11 @@ def _synced(item: dict) -> bool:
 
 
 @tool(writes=True)
-async def update_item(id: int, title: str = None, due_at: When = None, remind_at: RemindAt = None,
+async def update_item(item: ItemRef, title: str = None, due_at: When = None, remind_at: RemindAt = None,
                       notes: str = None, recurrence: Recurrence = None, category: Category = None) -> str:
-    """Change fields of an existing item by id."""
-    item = _item(id)
+    """Change fields of an existing item (e.g. a new time, or its latest status in notes)."""
+    item = _item(item)
+    id = item["id"]
     due_at, remind_at = _norm(due_at), _norm(remind_at)
     fields = {k: v for k, v in dict(title=title, due_at=due_at, remind_at=remind_at, notes=notes,
                                     recurrence=recurrence, category=category).items() if v is not None}
@@ -94,20 +113,43 @@ async def update_item(id: int, title: str = None, due_at: When = None, remind_at
 
 
 @tool(writes=True)
-def complete_item(id: int) -> str:
-    """Mark an item done (recurring items move to their next occurrence)."""
-    _item(id)
-    return "Done: " + store.describe(store.complete_item(id))
+def complete_item(item: ItemRef) -> str:
+    """Mark an item done when the user says they finished it (recurring items move to their next occurrence)."""
+    return "Done: " + store.describe(store.complete_item(_item(item)["id"]))
 
 
 @tool(writes=True)
-async def delete_item(id: int) -> str:
-    """Permanently delete an item."""
-    item = _item(id)
+async def delete_item(item: ItemRef) -> str:
+    """Permanently delete an item (for mistakes or cancelled plans; use complete_item for finished work)."""
+    item = _item(item)
+    id = item["id"]
     if _synced(item):
         await asyncio.to_thread(gcal.delete_event, item["gcal_id"])
     store.delete_item(id)
     return f"Deleted #{id} {item['title']}" + (" (also from Google Calendar)." if _synced(item) else ".")
+
+
+@tool
+def recap(days: Annotated[int, "How far back. 'This week' = days since Monday, plus 1."] = 7,
+          category: Category = None) -> str:
+    """What the user got done and what happened in the last N days: finished items, check-in answers and
+    past events. Use for 'what did I do / accomplish this week?'."""
+    n = db.now()
+    days = max(1, int(days or 7))
+    since = (n - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    keep = (lambda i: i["category"] == category) if category else (lambda i: True)
+    done = [i for i in store.done_since(since) if keep(i)]
+    events = [i for i in store.events_between(since, n) if keep(i)]
+    parts = [f"Recap from {since.strftime('%a %b %d')} to now ({n.strftime('%a %b %d %H:%M')}). "
+             f"Only what's listed here happened; upcoming and open items are NOT accomplishments.",
+             "Finished items:\n" + ("\n".join("  " + store.describe(i) for i in done) or "  (none recorded)"),
+             "Events that already happened:\n" + ("\n".join("  " + store.describe(i) for i in events) or "  (none)")]
+    checkins = skills.SKILLS.get("checkins")
+    if checkins and category in (None, "work"):
+        logs = checkins.history("work", days - 1)
+        parts.append("Work check-in answers:\n"
+                     + ("\n".join(f"  {r['date']}: {r['response']}" for r in logs) or "  (none)"))
+    return "\n\n".join(parts)
 
 
 # ---------- prompt context ----------
@@ -120,7 +162,8 @@ def context(ctx: ToolContext, query: str) -> str:
     items = store.list_items(3, exclude_category=None if work_day else "work")
     shown = items[:10]
     lines = [f"Calendar for resolving dates (\"next Friday\", \"every Monday\"):\n{days}",
-             f"{config.owner().capitalize()}'s open items (overdue + next 3 days{'' if work_day else ', work hidden'}):"]
+             f"{config.owner().capitalize()}'s open items (overdue + next 3 days{'' if work_day else ', work hidden'})."
+             f" None of these are done, and anything 'tomorrow' or 'in N days' hasn't happened yet:"]
     lines += ["  " + store.describe(i) for i in shown] or ["  (nothing)"]
     if len(items) > len(shown):
         lines.append(f"  (+{len(items) - len(shown)} more: use list_items)")

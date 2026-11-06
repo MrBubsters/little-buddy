@@ -1,4 +1,5 @@
 """Planner storage: items (events, deadlines, tasks, reminders) and the Google Calendar mirror."""
+import re
 from datetime import datetime, timedelta
 
 import config
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS items(
 """)
 db.add_column("items", "gcal_id", "TEXT")
 db.add_column("items", "all_day", "INTEGER NOT NULL DEFAULT 0")
+db.add_column("items", "done_at", "TEXT")
 conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_gcal ON items(gcal_id)")
 conn.commit()
 
@@ -127,9 +129,63 @@ def complete_item(item_id: int) -> dict | None:
         return None
     if item["recurrence"] != "none" and item["due_at"]:
         return roll_forward(item)
-    conn.execute("UPDATE items SET done=1 WHERE id=?", (item_id,))
+    conn.execute("UPDATE items SET done=1, done_at=? WHERE id=?", (fmt(now()), item_id))
     conn.commit()
     return get_item(item_id)
+
+
+def done_since(since: datetime) -> list[dict]:
+    """Items completed at or after `since`, oldest first."""
+    rows = conn.execute("SELECT * FROM items WHERE done=1 AND done_at >= ? ORDER BY done_at", (fmt(since),))
+    return [dict(r) for r in rows]
+
+
+def events_between(start: datetime, end: datetime) -> list[dict]:
+    rows = conn.execute("SELECT * FROM items WHERE kind='event' AND due_at >= ? AND due_at < ? ORDER BY due_at",
+                        (fmt(start), fmt(end)))
+    return [dict(r) for r in rows]
+
+
+_FILLER = set("""the a an and or of to for on in at with my our is was it this that be done did finished
+completed complete finish wrapped up off ticket task item""".split())
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _FILLER and (len(w) > 2 or w.isdigit())}
+
+
+def find_open(ref) -> list[dict]:
+    """Items matching `ref`: an id ('#12', '12', 12) or words from an open item's title or notes
+    ('the demo', 'go links', 'PRX-558'). One entry = a match; several = ambiguous, best first."""
+    ref = str(ref).strip()
+    m = re.fullmatch(r"#?(\d+)", ref)
+    if m:
+        item = get_item(int(m[1]))
+        return [item] if item else []
+    want = _words(ref)
+    if not want:
+        return []
+    scored = []
+    for r in conn.execute("SELECT * FROM items WHERE done=0"):
+        title, notes = _words(r["title"]), _words(r["notes"] or "")
+        score = len(want & title) + 0.5 * len(want & (notes - title))
+        if ref.lower() in r["title"].lower():
+            score += len(want)  # the whole phrase appears in the title
+        if score >= max(1.0, len(want) / 2):
+            scored.append((score, dict(r)))
+    scored.sort(key=lambda s: -s[0])
+    if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+        return [scored[0][1]]  # a clear winner
+    return [item for score, item in scored if score == scored[0][0]]
+
+
+def relative(ts: str | None) -> str:
+    """'today', 'tomorrow', 'in 3 days', '2 days ago': so the model never has to work out past vs future."""
+    if not ts:
+        return ""
+    days = (parse(ts).date() - now().date()).days
+    return {0: "today", 1: "tomorrow", -1: "yesterday"}.get(
+        days, f"in {days} days" if days > 0 else f"{-days} days ago")
 
 
 def delete_item(item_id: int) -> bool:
@@ -182,6 +238,8 @@ def describe(item: dict) -> str:
     when = pretty(item["due_at"])
     if item.get("all_day") and item["due_at"]:
         when = when[:10] + " (all day)"
+    if item["due_at"]:
+        when += f" ({relative(item['due_at'])})"
     icon = CATEGORY_ICONS.get(item["category"], "")
     s = f"{icon} #{item['id']} [{item['kind']}/{item['category']}] {item['title']} — {when}"
     if item.get("gcal_id"):
@@ -193,7 +251,7 @@ def describe(item: dict) -> str:
     if item["recurrence"] != "none":
         s += f" (repeats {item['recurrence']})"
     if item["done"]:
-        s += " ✅"
+        s += " ✅" + (f" done {pretty(item['done_at'])[:10]} ({relative(item['done_at'])})" if item.get("done_at") else "")
     if item["notes"]:
         s += f" — {item['notes']}"
     return s

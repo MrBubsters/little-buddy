@@ -8,7 +8,8 @@ from core.tools import tool
 
 GUIDE = """Memory:
 - When {owner} shares a lasting personal detail (names, relationships, routines, preferences, goals), call \
-remember with one short self-contained sentence. Not for requests, questions or passing remarks.
+remember with one short self-contained sentence. Not for requests, questions or passing remarks, and never \
+for tasks, to-dos or project status: those go in the planner (add_item) so they can be checked off.
 - When they ask you to keep something longer (an idea, a recipe, meeting notes, a list), call save_note.
 - Before saying you don't know something about them, call recall. Correct outdated facts with update_memory.
 - A memory ending in "(more: recall '#N')" is only a preview. If the question is about it, call recall with \
