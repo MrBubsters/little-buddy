@@ -69,6 +69,11 @@ def normalize(ts: str) -> str:
         return s
     except ValueError:
         pass
+    # An exact date wrapped in words ("Saturday 2026-11-07 12:00", "2026-11-07 at 12:00"): trust the date.
+    m = re.search(r"(\d{4}-\d{2}-\d{2})(?:[ T]+(?:at\s+)?(\d{1,2}):(\d{2}))?", s)
+    if m:
+        datetime.fromisoformat(m[1])  # still reject impossible dates
+        return m[1] + (f" {int(m[2]):02d}:{m[3]}" if m[2] else "")
     low = re.sub(r"[,]+", " ", s.lower()).strip()
     low = re.sub(r"^(?:every|each|starting)\s+", "", low)  # the repeat is a separate argument
     n = now()

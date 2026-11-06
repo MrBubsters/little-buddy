@@ -247,6 +247,8 @@ class NaturalTimeTest(unittest.TestCase):
             "12:15am": "2026-11-07 00:15",            # already passed today
             "2026-12-01 08:00": "2026-12-01 08:00",
             "sat": "2026-11-07",
+            "Saturday 2026-11-07 12:00": "2026-11-07 12:00",   # small models wrap exact dates in words
+            "2026-11-07 at 9:30": "2026-11-07 09:30",
         }
         for phrase, want in cases.items():
             if want is None:
@@ -265,6 +267,68 @@ class PlannerTest(unittest.TestCase):
         self.assertIn("Dentist", run(REGISTRY.run("list_items", {}, ToolContext())))
         self.assertIn("✅", run(REGISTRY.run("complete_item", {"id": item_id}, ToolContext())))
         self.assertIn("Error", run(REGISTRY.run("delete_item", {"id": 99999}, ToolContext())))
+
+
+class VoiceTest(unittest.TestCase):
+    def setUp(self):
+        db.clear_messages(None)
+
+    def test_voice_style_and_spoken_cleanup(self):
+        from core import style
+        self.assertIn("text-to-speech", style.for_mode("voice"))
+        fake = FakeLLM(Reply("- Dentist tomorrow at 3\n- Gym Friday\n- Call mom\nLet me know if you need anything!"),
+                       Reply("You've got three things, mainly the dentist tomorrow at 3. Let me know if you need anything!"))
+        llm.set_provider(fake)
+        reply = run(agent.chat("what's coming up?", ToolContext(mode="voice", conversation="v")))
+        self.assertEqual(reply, "You've got three things, mainly the dentist tomorrow at 3.")  # rewritten + sign-off cut
+        self.assertIsNone(fake.calls[1]["tools"])  # the rewrite pass is tool-free
+
+    def test_planner_speaks_dates(self):
+        due = db.fmt(db.now() + timedelta(days=1)).replace("T", " ")
+        run(REGISTRY.run("add_item", {"title": "Vet visit", "kind": "event", "category": "personal",
+                                      "due_at": due}, ToolContext()))
+        llm.set_provider(FakeLLM())
+        voice_ctx = run(agent.build_messages("hi", ToolContext(mode="voice")))[0][-1]["content"]
+        text_ctx = run(agent.build_messages("hi", ToolContext()))[0][-1]["content"]
+        self.assertRegex(voice_ctx, r"Vet visit \(event, personal\): tomorrow at")
+        self.assertRegex(text_ctx, r"#\d+ \[event/personal\] Vet visit")
+
+    def test_call_turn_owner_and_guest(self):
+        try:
+            import voice
+        except Exception as e:  # audio packages not installed
+            self.skipTest(f"voice packages unavailable: {e!r}")
+        sent, said = [], []
+
+        class Dest:
+            async def send(self, text):
+                sent.append(text)
+
+        class VC:
+            def is_playing(self):
+                return False
+        s = object.__new__(voice.VoiceSession)  # no real Discord connection
+        s.vc, s.text_dest, s.names, s.armed = VC(), Dest(), {1: "Jo"}, {}
+        s.conversation = "voice:test"
+
+        async def say(text):
+            said.append(text)
+        s.say = say
+        voice._to_whisper_audio = lambda pcm: pcm
+        heard = iter(["what's the plan for tonight", "nice, who are you?"])
+        voice._transcribe = lambda audio: next(heard)
+        fake = FakeLLM(Reply("Nothing's planned tonight, you're free."), Reply("I'm the assistant here, hi Jo!"))
+        llm.set_provider(fake)
+        run(s._handle(int(os.environ.get("OWNER_ID") or 0), b""))  # the owner
+        run(s._handle(1, b""))                                        # a friend in the call
+        owner_call, guest_call = fake.calls
+        self.assertIn("remember", {t["function"]["name"] for t in owner_call["tools"]})
+        self.assertNotIn("remember", {t["function"]["name"] for t in guest_call["tools"]})
+        self.assertTrue(guest_call["messages"][-1]["content"].endswith("(Jo says) nice, who are you?"))
+        # Same call = same conversation: the second turn saw the first.
+        self.assertIn("what's the plan for tonight", [m["content"] for m in guest_call["messages"]])
+        self.assertEqual(said, ["Nothing's planned tonight, you're free.", "I'm the assistant here, hi Jo!"])
+        self.assertTrue(sent[0].startswith("🎙️"))
 
 
 if __name__ == "__main__":

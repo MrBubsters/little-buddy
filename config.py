@@ -86,6 +86,20 @@ WORK_CHECKIN_DAYS = os.getenv("WORK_CHECKIN_DAYS", "mon,tue,wed,thu,fri")
 WEB_ENABLED = _bool("WEB_ENABLED")
 WEB_MAX_CHARS = int(os.getenv("WEB_MAX_CHARS", "4000"))  # page text returned to the model
 
+# --- Voice channels (optional; `!join` / `!leave`) ---
+# false = reply to everything said in the call (a one-on-one conversation).
+# true  = only reply when a wake word starts the sentence, e.g. "Buddy, remind me to call mom at 6".
+WAKE_WORD_REQUIRED = _bool("WAKE_WORD_REQUIRED")
+# An empty WAKE_WORDS= line (as in .env.example) falls back to BOT_NAME instead of matching nothing.
+WAKE_WORDS = _list("WAKE_WORDS") or [BOT_NAME.lower()]
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en")      # tiny.en/base.en/small.en/medium.en, or multilingual "small"
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")        # auto (GPU, else CPU) / cuda / cpu
+WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")      # empty = auto-detect (needs a multilingual model)
+VOICE_REPLIES = _bool("VOICE_REPLIES", "true")  # speak replies
+TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")   # Kokoro voice: af_heart, af_bella, am_michael, bf_emma, bm_george…
+TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))  # 0.8 = slower, 1.2 = faster
+VOICE_DEBUG = _bool("VOICE_DEBUG")  # pipeline/DAVE logs
+
 # --- Google Calendar (optional) ---
 GCAL_ENABLED = _bool("GCAL_ENABLED")
 GCAL_CREDENTIALS = os.getenv("GCAL_CREDENTIALS", os.path.join(_DATA, "credentials.json"))

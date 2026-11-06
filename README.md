@@ -110,6 +110,9 @@ lines in `.env`. Together they roughly halve the memory the context uses:
 After that, try `OLLAMA_NUM_CTX=10240` and check `ollama ps` still says **100% GPU** while replying.
 Don't count on 14b models: they don't fit in 8 GB and slow down a lot when they spill to the CPU.
 
+**Voice calls on 8 GB:** Whisper takes about 1 GB of VRAM next to the model. Either keep
+`OLLAMA_NUM_CTX=6144`, or set `WHISPER_DEVICE=cpu` (slower transcription, but leaves the GPU to the model).
+
 #### 12 GB GPU (e.g. RTX 4070, 3060 12 GB)
 `OLLAMA_MODEL=qwen3:14b` with `OLLAMA_NUM_CTX=8192`, plus the same two Ollama settings. If you
 develop here but deploy to an 8 GB machine, test with the 8 GB settings so what you test is what you ship.
@@ -171,6 +174,7 @@ These answer instantly without using the AI (`!help` lists them all, including o
 | `!sync` | Sync Google Calendar right now |
 | `!status` | Model, backend, loaded skills, and how the context window is used |
 | `!skills` | Loaded skills and their tools |
+| `!join` / `!leave` | Join or leave the voice channel you're in (see [Voice channels](#voice-channels)) |
 | `!reset` | Clear chat history (your items, memories and jobs are kept) |
 | `!help` | Show help |
 
@@ -197,6 +201,34 @@ reminders wait until the next work morning.
 | 🏠 | personal | errands, health, bills, chores |
 
 📆 marks items synced with Google Calendar.
+
+### Voice channels
+Join a voice channel in a server the bot is in, then DM it `!join`, and just talk. It replies to
+everything said in the channel, like a friend on a call. It posts each transcript and reply in the DM
+and speaks the reply. Each call is its own conversation, so follow-ups like "and tomorrow?" work, and
+your DM history doesn't leak into spoken replies. Your memories, schedule and tools work the same as in text.
+
+It can still save and look up items ("remind me to stretch at five"). Friends in the call can talk to
+it too: the model is told who's speaking, and friends can't use owner-only tools (memories, check-ins, jobs).
+`!leave` disconnects, and the bot also leaves on its own once every human has left.
+
+Prefer it to only answer when addressed? Set `WAKE_WORD_REQUIRED=true` and start sentences with its
+name ("Buddy, what's on today?").
+
+- Speech-to-text is [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (GPU, ~1 GB VRAM next to the LLM; CPU fallback).
+  Text-to-speech is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) on the CPU (about 4× faster than real time).
+  Both run locally, and their models download on the first `!join`. Pick a voice with `TTS_VOICE` (default `af_heart`).
+- How it talks in calls is the `voice` skill ([skills/voice.py](skills/voice.py)); edit its style text to change it.
+- In voice, the bot talks instead of writing. It gives the gist instead of reading out lists, says times
+  like "tomorrow at 3", says "one sec" when the model is slow, and stops talking if you say its name again.
+- With wake words on, Whisper may spell an unusual name differently. Add the spellings it uses (shown in the
+  console as `[voice] Name: ...`) to `WAKE_WORDS`, e.g. `WAKE_WORDS=buddy,body,bud`.
+- Bots can only join **server** voice channels, not DM or group calls. The bot needs *Connect* and *Speak* permissions there.
+- **Let people in the call know the bot is listening.** Audio is never saved. Everything said is
+  transcribed, printed to the bot's console, sent to the local model, and kept in its chat history.
+- Use headphones. If your mic picks up the bot's voice from speakers, it can end up replying to itself.
+- Discord encrypts all voice end-to-end (DAVE). `voice.py` adds DAVE decryption to the
+  `discord-ext-voice-recv` alpha library, so keep that package at the pinned version.
 
 ---
 
@@ -227,6 +259,7 @@ Restart the bot after editing `.env`.
 | Path | Purpose |
 |---|---|
 | `bot.py` | Discord front-end: routes messages to commands or the agent, delivers notifications |
+| `voice.py` | Voice calls: Discord audio, DAVE decryption, Whisper speech-to-text, Kokoro text-to-speech |
 | `cli.py` | Terminal front-end for trying things without Discord (`python cli.py "hello"`) |
 | `core/agent.py` | The agent loop and prompt builder (persona, skill context, memory, history, budgets) |
 | `core/llm.py` | Model backends (Ollama, OpenAI-compatible) |
@@ -236,7 +269,7 @@ Restart the bot after editing `.env`.
 | `core/scheduler.py` | 30-second heartbeat and self-scheduled jobs |
 | `core/style.py` | Reply style per mode (text, scheduled, or ones a front-end registers) |
 | `core/db.py` | SQLite connection, time parsing, chat history |
-| `skills/` | Abilities: `planner/` (items, digest, Google Calendar), `checkins`, `memory`, `jobs`, `utilities`, `web`, `system` |
+| `skills/` | Abilities: `planner/` (items, digest, Google Calendar), `checkins`, `memory`, `jobs`, `utilities`, `web`, `voice` (how it talks in calls), `system` |
 | `tests/` | Engine tests with a fake model: `python -m unittest discover tests` |
 | `tools/bench.py` | Reply-speed benchmark for the machine it runs on |
 | `config.py` | Reads `.env` |

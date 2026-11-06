@@ -111,17 +111,37 @@ async def delete_item(id: int) -> str:
 
 
 # ---------- prompt context ----------
+def _spoken_when(due: str | None, all_day: bool) -> str:
+    """'Saturday (in 2 days) at 4 PM' style, so the model doesn't have to do date math out loud."""
+    if not due:
+        return "no date"
+    d, today = db.parse(due), db.now().date()
+    delta = (d.date() - today).days
+    day = ("today" if delta == 0 else "tomorrow" if delta == 1 else f"{d.strftime('%A')} (in {delta} days)"
+           if 1 < delta < 7 else f"{d.strftime('%A %B')} {d.day}" + (" (overdue)" if delta < 0 else ""))
+    if all_day:
+        return day + ", all day"
+    return f"{day} at {d.strftime('%I:%M %p').lstrip('0').replace(':00', '')}"
+
+
 def context(ctx: ToolContext, query: str) -> str:
     n = db.now()
     # One date per line: small models misread weekdays from a run-on list.
     days = "\n".join(f"  {(n + timedelta(days=d)).strftime('%A %Y-%m-%d')}" + (" (today)" if d == 0 else "")
                      for d in range(14))
     work_day = store.is_work_day(n)
-    items = store.list_items(3, exclude_category=None if work_day else "work")
+    spoken = ctx.mode == "voice"  # spoken replies: a week ahead, phrased the way people say it
+    horizon = 7 if spoken else 3
+    items = store.list_items(horizon, exclude_category=None if work_day else "work")
     shown = items[:10]
     lines = [f"Calendar for resolving dates (\"next Friday\", \"every Monday\"):\n{days}",
-             f"{config.owner().capitalize()}'s open items (overdue + next 3 days{'' if work_day else ', work hidden'}):"]
-    lines += ["  " + store.describe(i) for i in shown] or ["  (nothing)"]
+             f"{config.owner().capitalize()}'s open items (overdue + next {horizon} days"
+             f"{'' if work_day else ', work hidden'}). This is the whole schedule; use it only when relevant:"]
+    if spoken:
+        lines += [f"  - {i['title']} ({i['kind']}, {i['category']}): {_spoken_when(i['due_at'], i.get('all_day'))}"
+                  for i in shown] or ["  (nothing planned)"]
+    else:
+        lines += ["  " + store.describe(i) for i in shown] or ["  (nothing)"]
     if len(items) > len(shown):
         lines.append(f"  (+{len(items) - len(shown)} more: use list_items)")
     if not work_day:
