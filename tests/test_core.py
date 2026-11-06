@@ -118,19 +118,30 @@ class AgentTest(unittest.TestCase):
     def test_prompt_is_general_and_includes_skills(self):
         llm.set_provider(FakeLLM(Reply("hi")))
         msgs, schemas = run(agent.build_messages("hello", ToolContext()))
-        system = msgs[0]["content"]
+        system, newest = msgs[0]["content"], msgs[-1]["content"]
         self.assertIn("generalist", system)
-        self.assertIn("Calendar for resolving dates", system)   # planner context
         self.assertIn("schedule_job", system)                    # jobs guide
+        self.assertIn("Calendar for resolving dates", newest)    # planner's live context
+        self.assertTrue(newest.startswith("<context>") and newest.endswith("hello"))
         self.assertTrue(any(s["function"]["name"] == "add_item" for s in schemas))
+
+    def test_system_prompt_is_cacheable(self):
+        """Nothing that changes between messages may leak into the system prompt (it breaks prompt caching)."""
+        llm.set_provider(FakeLLM())
+        first = run(agent.build_messages("what's on today?", ToolContext()))[0][0]["content"]
+        run(memory.add("Plays the cello on Tuesdays.", "fact"))
+        second = run(agent.build_messages("tell me about cello", ToolContext()))[0][0]["content"]
+        self.assertEqual(first, second)
+        self.assertNotIn(db.now().strftime("%Y-%m-%d"), first)
 
     def test_guest_message_is_attributed(self):
         fake = FakeLLM(Reply("hey"))
         llm.set_provider(fake)
         run(agent.chat("hi there", ToolContext(is_owner=False, speaker="Jo", conversation="g")))
         sent = fake.calls[0]["messages"]
-        self.assertEqual(sent[-1]["content"], "(Jo says) hi there")
-        self.assertIn("NOT Sam", sent[0]["content"])
+        self.assertTrue(sent[-1]["content"].endswith("(Jo says) hi there"))
+        self.assertIn("NOT Sam", sent[-1]["content"])
+        self.assertEqual(db.recent_messages(2, "g")[0]["content"], "(Jo says) hi there")  # history stays clean
 
     def test_step_limit_forces_answer(self):
         loops = [Reply("", [call("list_jobs")]) for _ in range(20)]
