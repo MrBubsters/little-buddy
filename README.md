@@ -153,8 +153,10 @@ Just DM the bot like you'd text a person:
 > what's on this week?
 > what did I get done at work this week?
 
-The bot confirms what it saved, e.g. `🏠 #12 [event/personal] Dentist — Tue Nov 10 15:00`. The
-`#12` is the item's ID, so you can say "delete #12" or "mark #12 done".
+The bot confirms what it saved, e.g. `🏠 #12 [event/personal] Dentist — Tue Nov 10 15:00 (in 4 days)`. The
+`#12` is the item's ID, so you can say "delete #12" or "mark #12 done", but you don't have to: "I finished
+the dentist forms" or "the demo went well" finds the matching item. Ongoing work (projects, tickets) is kept
+as tasks with their status, so "what's left?" and "what did I get done this week?" stay accurate.
 
 ### Commands
 These answer instantly without using the AI (`!help` lists them all, including ones skills add):

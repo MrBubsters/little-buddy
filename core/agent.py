@@ -162,8 +162,25 @@ _NUDGE = ("[System check: your reply promises to do something later, but nothing
           "rewrite your reply without that promise.]")
 
 
+_CLAIM = re.compile(r"\bI(?:'ve| have)\s+(?:\w+\s+)?(?:updated|logged|saved|marked|noted|added|recorded|removed|"
+                    r"deleted|completed|created|moved|cleared|changed|checked off)\b", re.I)
+_CLAIM_NUDGE = ("[System check: your reply says you saved or changed something, but no tool changed anything this "
+                "turn, so nothing was saved. Call the right tool now (e.g. complete_item, update_item, add_item, "
+                "remember, update_memory), or rewrite your reply without claiming it.]")
+_PRELOGGED = re.compile(r"\[[^\]]+ logged\]")  # a check-in answer the app already saved before the model ran
+
+
 def _can_schedule(schemas: list[dict]) -> bool:
     return any(s["function"]["name"] in ("schedule_job", "add_item") for s in schemas)
+
+
+def _unbacked(reply: str, text: str, schemas: list[dict]) -> str | None:
+    """A nudge if the reply promises or claims a change that no tool made this turn."""
+    if _PROMISE.search(reply) and _can_schedule(schemas):
+        return _NUDGE
+    if _CLAIM.search(reply) and not _PRELOGGED.match(text) and schemas:
+        return _CLAIM_NUDGE
+    return None
 
 
 def _cap(result: str, messages: list[dict], schemas: list[dict]) -> str:
@@ -185,10 +202,11 @@ async def chat(text: str, ctx: ToolContext | None = None) -> str:
         resp = await llm.chat(messages, None if last else schemas)
         if not resp.tool_calls:
             reply = resp.content
-            if not last and not nudged and not receipts and _PROMISE.search(reply) and _can_schedule(schemas):
-                # Small models often promise to do something later without scheduling it.
+            nudge = None if last or nudged or receipts else _unbacked(reply, text, schemas)
+            if nudge:
+                # Small models often promise to do something later, or say they saved something, without a tool call.
                 nudged = True
-                messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": _NUDGE}]
+                messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": nudge}]
                 continue
             break
         messages.append({"role": "assistant", "content": resp.content, "tool_calls": resp.tool_calls})

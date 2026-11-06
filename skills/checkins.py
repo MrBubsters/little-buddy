@@ -139,9 +139,10 @@ def history(name: str, days: int = 7) -> list[dict]:
 Name = Literal[tuple(BY_NAME)]
 
 GUIDE = """Check-ins:
-- A message starting with "[<something> logged]" is a check-in answer that's already saved: acknowledge it in \
-one encouraging line, and add any future tasks or deadlines it mentions.
-- Use checkin_history for questions like "what did I get done this week?"."""
+- A message starting with "[<something> logged]" is a check-in answer that's already saved. Compare it with \
+the open items: complete_item each one it says is finished, update_item notes for progress, and add_item new \
+tasks or deadlines it mentions. Then acknowledge it in one encouraging line.
+- Use checkin_history to read back past check-in answers."""
 
 
 @tool(writes=True, owner_only=True)
@@ -151,7 +152,8 @@ def log_checkin(name: Name, summary: Annotated[str, "The user's update, in their
     if not c:
         return "Error: unknown check-in."
     complete(c, summary)
-    return f"Logged today's {c.label}."
+    return (f"Logged today's {c.label}.\nNow compare it with the open items: call complete_item for each one it "
+            f"says is finished, update_item notes for progress, add_item for new tasks it mentions.")
 
 
 @tool(owner_only=True)
