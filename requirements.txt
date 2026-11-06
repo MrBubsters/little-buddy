@@ -1,7 +1,21 @@
-discord.py>=2.5
+discord.py[voice]>=2.7
+# Discord voice encryption (DAVE). davey 0.2 changed its API (new keys need an explicit
+# prepare/execute_transition) and discord.py 2.7.1 doesn't call it yet, so voice can't
+# decrypt or encrypt. Remove this pin once discord.py supports davey 0.2.
+davey>=0.1.7,<0.2
 ollama>=0.5
 python-dotenv>=1.0
 tzdata
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
+
+# Voice channels (!join). voice.py patches this alpha library for Discord's DAVE encryption,
+# so keep it pinned and re-test before upgrading.
+discord-ext-voice-recv==0.5.2a179
+faster-whisper>=1.2
+kokoro-onnx>=0.4.7
+soxr>=0.5
+# GPU speech recognition on Windows/Linux with an NVIDIA card (skip on Mac / CPU-only).
+nvidia-cublas-cu12; sys_platform != "darwin"
+nvidia-cudnn-cu12>=9,<10; sys_platform != "darwin"

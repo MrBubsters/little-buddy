@@ -125,6 +125,32 @@ reminders wait until the next work morning.
 
 📆 marks items synced with Google Calendar.
 
+### Voice channels
+Join a voice channel in a server the bot is in, then DM it `!join`, and just talk. It replies to
+everything said in the channel, like a friend on a call. It posts each transcript and reply in the DM
+and speaks the reply. It remembers what was said earlier in the call, so follow-ups like "and tomorrow?" work.
+
+It can still save and look up items ("remind me to stretch at five"). Friends in the call can talk to
+it too: the model is told who's speaking, and friends can't change your saved facts or check-ins.
+`!leave` disconnects, and the bot also leaves on its own once every human has left.
+
+Prefer it to only answer when addressed? Set `WAKE_WORD_REQUIRED=true` and start sentences with its
+name ("Buddy, what's on today?").
+
+- Speech-to-text is [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (GPU, ~1 GB VRAM next to the LLM; CPU fallback).
+  Text-to-speech is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) on the CPU (about 4× faster than real time).
+  Both run locally, and their models download on the first `!join`. Pick a voice with `TTS_VOICE` (default `af_heart`).
+- In voice, the bot talks instead of writing. It gives the gist instead of reading out lists, says times
+  like "tomorrow at 3", says "one sec" when the model is slow, and stops talking if you say its name again.
+- With wake words on, Whisper may spell an unusual name differently. Add the spellings it uses (shown in the
+  console as `[voice] Name: ...`) to `WAKE_WORDS`, e.g. `WAKE_WORDS=buddy,body,bud`.
+- Bots can only join **server** voice channels, not DM or group calls. The bot needs *Connect* and *Speak* permissions there.
+- **Let people in the call know the bot is listening.** Audio is never saved. Everything said is
+  transcribed, printed to the bot's console, sent to the local model, and kept in its chat history.
+- Use headphones. If your mic picks up the bot's voice from speakers, it can end up replying to itself.
+- Discord encrypts all voice end-to-end (DAVE). `voice.py` adds DAVE decryption to the
+  `discord-ext-voice-recv` alpha library, so keep that package at the pinned version.
+
 ---
 
 ## Configuration

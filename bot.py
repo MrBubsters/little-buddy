@@ -11,6 +11,12 @@ import config
 import db
 import gcal
 
+try:
+    import voice  # optional: needs the voice packages from requirements.txt
+except Exception as _e:
+    voice = None
+    print(f"[voice] disabled ({_e!r})")
+
 # Windows consoles default to cp1252 and crash on emoji in log lines.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -26,6 +32,7 @@ HELP = f"""**{config.BOT_NAME}** — just talk to me normally, e.g.
 • "my sister's name is Ana, birthday is March 4"
 Commands: `!agenda` `!week` (add `all` to include work on weekends) `!facts` `!digest` `!sync` (Google Calendar) `!reset` (clear chat history) `!help`
 Check-ins: `!update <what you did>` `!skip` (skip today's check-ins) `!worklog` (last 7 days)
+Voice: `!join` (joins the voice channel you're in, then just talk) `!leave`
 📆 = synced with Google Calendar"""
 
 
@@ -129,6 +136,15 @@ async def on_ready():
 
 
 @bot.event
+async def on_voice_state_update(member, before, after):
+    """Leave the voice channel once every human has left it."""
+    s = voice and voice.session
+    if s and before.channel and before.channel == s.vc.channel and not voice.humans_left(before.channel):
+        await voice.leave()
+        await send(s.text_dest, "👋 Everyone left, so I left the voice channel too.")
+
+
+@bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.author.id != config.OWNER_ID:
         return
@@ -163,6 +179,20 @@ async def on_message(message: discord.Message):
         rows = checkins.history("work", 7)
         return await send(message.channel, "\n".join(f"**{r['date']}** {r['response']}" for r in rows)
                           or "No work updates in the last 7 days.")
+    if cmd == "!join":
+        if not voice:
+            return await send(message.channel, "Voice isn't available. Install the voice packages (see README).")
+        channel = voice.owner_voice_channel(bot)
+        if not channel:
+            return await send(message.channel, "Join a voice channel in a server I'm in first, then `!join`.")
+        async with message.channel.typing():
+            try:
+                return await send(message.channel, await voice.join(channel, message.channel, agent.chat, llm_lock))
+            except Exception as e:
+                return await send(message.channel, f"⚠️ Couldn't join voice: {e.__class__.__name__}: {e}")
+    if cmd == "!leave":
+        left = bool(voice) and await voice.leave()
+        return await send(message.channel, "👋 Left the voice channel." if left else "I'm not in a voice channel.")
     if cmd == "!reset":
         db.clear_messages()
         return await send(message.channel, "Chat history cleared (items and facts kept).")

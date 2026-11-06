@@ -41,6 +41,19 @@ HISTORY_MESSAGES =int(os.getenv("HISTORY_MESSAGES", "12"))
 _DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 DB_PATH = os.getenv("DB_PATH", os.path.join(_DATA, "jarofass.db"))
 
+# --- Voice channels (optional; `!join` / `!leave`) ---
+# false = reply to everything said in the call (a one-on-one conversation).
+# true  = only reply when a wake word starts the sentence, e.g. "Buddy, remind me to call mom at 6".
+WAKE_WORD_REQUIRED = os.getenv("WAKE_WORD_REQUIRED", "false").strip().lower() in ("1", "true", "yes")
+WAKE_WORDS = [w.strip().lower() for w in os.getenv("WAKE_WORDS", BOT_NAME).split(",") if w.strip()]
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en")      # tiny.en/base.en/small.en/medium.en, or multilingual "small"
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")        # auto (GPU, else CPU) / cuda / cpu
+WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")      # empty = auto-detect (needs a multilingual model)
+VOICE_REPLIES = os.getenv("VOICE_REPLIES", "true").strip().lower() in ("1", "true", "yes")  # speak replies
+TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")   # Kokoro voice: af_heart, af_bella, am_michael, bf_emma, bm_george…
+TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))  # 0.8 = slower, 1.2 = faster
+VOICE_DEBUG = os.getenv("VOICE_DEBUG", "false").strip().lower() in ("1", "true", "yes")  # pipeline/DAVE logs
+
 # --- Google Calendar (optional) ---
 GCAL_ENABLED = os.getenv("GCAL_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 GCAL_CREDENTIALS = os.getenv("GCAL_CREDENTIALS", os.path.join(_DATA, "credentials.json"))
