@@ -35,8 +35,8 @@ The first paragraph of the docstring is the description the model sees.
 | Name | Purpose |
 |---|---|
 | `@tool` functions | Things the model can call. Options: `writes=True` (the result is shown to you as a ✔ receipt), `owner_only=True` (hidden from guests), `enabled=callable` (switch on or off at runtime). Add a `ctx` parameter to receive the `ToolContext`. |
-| `GUIDE` | Prompt text on *when* to use the tools. Included only while the skill's tools are available. `{owner}` is filled in. |
-| `context(ctx, query)` | Live information for the system prompt, such as today's agenda. Keep it short: it's sent with every message. |
+| `GUIDE` | Prompt text on *when* to use the tools. Included only while the skill's tools are available. `{owner}` is filled in. It's part of the cached system prompt, so it must not change between messages: put dates, counts or anything live in `context` instead. |
+| `context(ctx, query)` | Live information, such as today's agenda. It goes in the `<context>` block of the newest message (not the system prompt) and is read fresh every message, so keep it short. |
 | `@command("!name", "help")` | A chat command that answers instantly without the model. Return a string, or `Forward(text)` to pass text on to the model. |
 | `preprocess(text, ctx, meta)` | Rewrite an incoming message first. `meta["reply_to"]` is the Discord message it replies to. |
 | `on_start()` | Runs once after the front-end connects. |

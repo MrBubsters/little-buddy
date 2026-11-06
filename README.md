@@ -76,14 +76,51 @@ more memory and longer conversations. `!status` shows where it goes.
 |---|---|---|---|
 | No GPU (CPU only, 16 GB+ RAM) | `qwen3:4b` | `4096` | Works; replies take 10–60 s |
 | 6 GB GPU | `qwen3:4b` | `6144` | Fast, decent accuracy |
-| **8 GB GPU** | **`qwen3:8b`** (default) | `6144` | Good balance; uses ~6.5 GB |
-| 12 GB+ GPU | `qwen3:8b` | `8192` | Or try `qwen3:14b` for better accuracy |
+| **8 GB GPU** | **`qwen3:8b`** (default) | `6144` | Good balance; uses ~6.5 GB. See [the 8 GB profile](#8-gb-gpu-eg-rtx-2070-super-3070-4060) |
+| 12 GB GPU | `qwen3:14b` | `8192` | Noticeably better at multi-step requests than 8b. Or `qwen3:8b` with a 16k context |
 | 16 GB+ GPU / Apple Silicon 16 GB+ | `qwen3:14b` | `8192` | Best accuracy of these |
 
 **Check it fits:** while the bot is replying, run `ollama ps`. The *PROCESSOR* column should say
 **100% GPU**. A CPU/GPU split means it's too big: lower `OLLAMA_NUM_CTX` or pick a smaller model.
 
 Reminders, the digest and check-ins don't use the model, so they're instant regardless.
+
+### Hardware profiles
+On a local GPU, how many words per second the model writes depends mostly on the card's memory
+speed, and what fits depends on its memory size. Before each reply the model also reads the whole
+prompt (about 3–7k tokens here), which is slower on older cards. The prompt is laid out so the
+unchanged part (instructions, tool definitions, earlier chat) is reused from Ollama's cache; only
+the newest message and its context block are read fresh.
+
+#### 8 GB GPU (e.g. RTX 2070 Super, 3070, 4060)
+```
+OLLAMA_MODEL=qwen3:8b
+OLLAMA_NUM_CTX=6144
+SKILLS_DISABLED=web          # unless you use web search; every skill's tools take up context
+LLM_CONCURRENCY=1
+```
+Also turn on two **Ollama server** settings. They're environment variables for Ollama itself, not
+lines in `.env`. Together they roughly halve the memory the context uses:
+
+| | Windows (PowerShell, then quit and restart the Ollama app from the tray) | Linux (`sudo systemctl edit ollama`, then restart it) |
+|---|---|---|
+| Flash attention | `setx OLLAMA_FLASH_ATTENTION 1` | `Environment="OLLAMA_FLASH_ATTENTION=1"` |
+| Smaller context cache | `setx OLLAMA_KV_CACHE_TYPE q8_0` | `Environment="OLLAMA_KV_CACHE_TYPE=q8_0"` |
+
+After that, try `OLLAMA_NUM_CTX=10240` and check `ollama ps` still says **100% GPU** while replying.
+Don't count on 14b models: they don't fit in 8 GB and slow down a lot when they spill to the CPU.
+
+#### 12 GB GPU (e.g. RTX 4070, 3060 12 GB)
+`OLLAMA_MODEL=qwen3:14b` with `OLLAMA_NUM_CTX=8192`, plus the same two Ollama settings. If you
+develop here but deploy to an 8 GB machine, test with the 8 GB settings so what you test is what you ship.
+
+#### Measuring
+`tools/bench.py` replays a fixed conversation (on a throwaway copy of your database) and reports the
+prompt-reading, writing and total time per message. Run it on the machine you deploy to whenever
+you change the model, the context size or the skills:
+```
+.venv\Scripts\python tools\bench.py --runs 3
+```
 
 ### Scaling up
 Nothing is tied to one model or one machine:
@@ -201,6 +238,7 @@ Restart the bot after editing `.env`.
 | `core/db.py` | SQLite connection, time parsing, chat history |
 | `skills/` | Abilities: `planner/` (items, digest, Google Calendar), `checkins`, `memory`, `jobs`, `utilities`, `web`, `system` |
 | `tests/` | Engine tests with a fake model: `python -m unittest discover tests` |
+| `tools/bench.py` | Reply-speed benchmark for the machine it runs on |
 | `config.py` | Reads `.env` |
 | `start.bat` / `start.sh` | Launchers (create the venv on first run) |
 | `deploy/little-buddy.service` | systemd service for Linux |
@@ -216,7 +254,7 @@ Restart the bot after editing `.env`.
 | Bot is online but never replies | Enable **Message Content Intent**; check `OWNER_ID` is *your* ID ([Discord setup](docs/discord-setup.md#test-it)) |
 | "Couldn't reach the local model" | Ollama isn't running. Windows: start the Ollama app. Linux: `sudo systemctl start ollama` |
 | `model "…" not found` | `ollama pull <OLLAMA_MODEL>` |
-| Replies are very slow | Model doesn't fit your GPU. See [Choosing a model](#choosing-a-model) |
+| Replies are very slow | Model doesn't fit your GPU. See [Choosing a model](#choosing-a-model) and [Hardware profiles](#hardware-profiles); measure with `tools/bench.py` |
 | "context is tight" in the console | Too many tools for the context size: raise `OLLAMA_NUM_CTX`, or turn skills off with `SKILLS_DISABLED` |
 | A skill doesn't show up | `!skills` lists load errors; set `SKILLS_DEBUG=1` for the full traceback |
 | Wrong dates or times | Set `TIMEZONE` correctly; for repeated mistakes try a larger model |

@@ -21,8 +21,10 @@ import config
 class Reply:
     content: str = ""
     tool_calls: list[dict] = field(default_factory=list)
-    prompt_tokens: int | None = None
+    prompt_tokens: int | None = None      # prompt size as the server reports it (Ollama includes cached tokens)
     completion_tokens: int | None = None
+    prompt_seconds: float | None = None   # time spent reading the prompt (when the server reports it)
+    gen_seconds: float | None = None      # time spent writing the reply
 
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.S)
@@ -75,7 +77,9 @@ class OllamaProvider(Provider):
         r = await self.client.chat(**kwargs)
         calls = [{"id": f"call_{i}", "name": c.function.name, "arguments": dict(c.function.arguments or {})}
                  for i, c in enumerate(r.message.tool_calls or [])]
-        return Reply(_clean(r.message.content), calls, r.prompt_eval_count, r.eval_count)
+        ns = lambda v: v / 1e9 if v else None  # noqa: E731
+        return Reply(_clean(r.message.content), calls, r.prompt_eval_count, r.eval_count,
+                     ns(r.prompt_eval_duration), ns(r.eval_duration))
 
     async def embed(self, texts, model):
         r = await self.client.embed(model=model, input=texts, keep_alive=config.OLLAMA_KEEP_ALIVE)
