@@ -79,7 +79,7 @@ Every other setting is explained in comments inside the file.
 
 ## 6. Google Calendar (optional)
 Follow [Google Calendar setup](google-calendar-setup.md). In short: put `credentials.json` in
-`data\`, run `.venv\Scripts\python gcal.py`, approve in the browser, set `GCAL_ENABLED=true`.
+`data\`, run `.venv\Scripts\python -m skills.planner.gcal`, approve in the browser, set `GCAL_ENABLED=true`.
 
 ## 7. Run
 Double-click **`start.bat`** in the project folder, or:
