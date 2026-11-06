@@ -1,7 +1,7 @@
 """Google Calendar two-way sync.
 
 One-time setup: put your OAuth client file at data/credentials.json, then run
-    .venv\\Scripts\\python gcal.py
+    .venv\\Scripts\\python -m skills.planner.gcal
 to authorize in the browser. That writes data/token.json (copy it to the server PC too).
 """
 import asyncio
@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 import config
-import db
+from skills.planner import store as db
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 RRULES = {
@@ -47,7 +47,7 @@ def _creds(interactive: bool = False):
         flow = InstalledAppFlow.from_client_secrets_file(config.GCAL_CREDENTIALS, SCOPES)
         creds = flow.run_local_server(port=0)
     else:
-        raise RuntimeError("Google Calendar not authorized. Run: .venv\\Scripts\\python gcal.py")
+        raise RuntimeError("Google Calendar not authorized. Run: .venv\\Scripts\\python -m skills.planner.gcal")
     with open(config.GCAL_TOKEN, "w") as f:
         f.write(creds.to_json())
     return creds

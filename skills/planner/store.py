@@ -1,20 +1,16 @@
-"""SQLite storage: items (events/deadlines/tasks/reminders), facts about the user, chat history."""
-import calendar
-import os
-import sqlite3
+"""Planner storage: items (events, deadlines, tasks, reminders) and the Google Calendar mirror."""
 from datetime import datetime, timedelta
 
 import config
+from core import db
+from core.db import conn, fmt, now, parse, pretty
 
-FMT = "%Y-%m-%dT%H:%M"
-RECURRENCES = ("none", "daily", "weekdays", "weekly", "monthly", "yearly")
 KINDS = ("event", "deadline", "task", "reminder")
+CATEGORIES = ("work", "social", "personal")
+RECURRENCES = tuple(r for r in db.RECURRENCES if r != "hourly")
+CATEGORY_ICONS = {"work": "💼", "social": "🎉", "personal": "🏠"}
 
-os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
-conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
-conn.row_factory = sqlite3.Row
-conn.executescript(
-    """
+db.ensure_schema("""
 CREATE TABLE IF NOT EXISTS items(
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL DEFAULT 'task',
@@ -28,46 +24,13 @@ CREATE TABLE IF NOT EXISTS items(
     reminded INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS facts(id INTEGER PRIMARY KEY, fact TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
-"""
-)
-# migrations for Google Calendar sync
-_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
-if "gcal_id" not in _cols:
-    conn.execute("ALTER TABLE items ADD COLUMN gcal_id TEXT")
-if "all_day" not in _cols:
-    conn.execute("ALTER TABLE items ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0")
+""")
+db.add_column("items", "gcal_id", "TEXT")
+db.add_column("items", "all_day", "INTEGER NOT NULL DEFAULT 0")
 conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_gcal ON items(gcal_id)")
 conn.commit()
 
-
-# ---------- time helpers ----------
-def now() -> datetime:
-    return datetime.now(config.TZ).replace(tzinfo=None, second=0, microsecond=0)
-
-
-def parse(ts: str | None) -> datetime | None:
-    """Accept 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM', ISO with tz, etc. Date-only -> 09:00."""
-    if not ts:
-        return None
-    ts = str(ts).strip().replace(" ", "T")
-    dt = datetime.fromisoformat(ts)
-    if dt.tzinfo:
-        dt = dt.astimezone(config.TZ).replace(tzinfo=None)
-    if len(ts) == 10:
-        dt = dt.replace(hour=9)
-    return dt.replace(second=0, microsecond=0)
-
-
-def fmt(dt: datetime | None) -> str | None:
-    return dt.strftime(FMT) if dt else None
-
-
-_DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-WORK_DAYS = {_DAY_NAMES.index(d.strip()[:3].lower()) for d in config.WORK_DAYS.split(",") if d.strip()}
-CATEGORY_ICONS = {"work": "💼", "social": "🎉", "personal": "🏠"}
+WORK_DAYS = set(db.parse_days(config.WORK_DAYS))
 
 
 def is_work_day(dt: datetime | None = None) -> bool:
@@ -84,34 +47,6 @@ def next_work_start(dt: datetime | None = None) -> datetime:
     return d.replace(hour=h, minute=m, second=0, microsecond=0)
 
 
-def pretty(ts: str | None) -> str:
-    if not ts:
-        return "no date"
-    return datetime.strptime(ts, FMT).strftime("%a %b %d %H:%M")
-
-
-def shift(dt: datetime, rec: str) -> datetime | None:
-    if rec == "daily":
-        return dt + timedelta(days=1)
-    if rec == "weekly":
-        return dt + timedelta(weeks=1)
-    if rec == "weekdays":
-        dt += timedelta(days=1)
-        while dt.weekday() >= 5:
-            dt += timedelta(days=1)
-        return dt
-    if rec == "monthly":
-        y, m = dt.year + dt.month // 12, dt.month % 12 + 1
-        return dt.replace(year=y, month=m, day=min(dt.day, calendar.monthrange(y, m)[1]))
-    if rec == "yearly":
-        try:
-            return dt.replace(year=dt.year + 1)
-        except ValueError:  # Feb 29
-            return dt.replace(year=dt.year + 1, day=28)
-    return None
-
-
-# ---------- items ----------
 def _default_remind(due: datetime | None, kind: str) -> datetime | None:
     if not due:
         return None
@@ -175,8 +110,8 @@ def roll_forward(item: dict) -> dict:
     due, remind = parse(item["due_at"]), parse(item["remind_at"])
     rec, cur = item["recurrence"], now()
     while True:
-        due = shift(due, rec) if due else None
-        remind = shift(remind, rec) if remind else None
+        due = db.shift(due, rec) if due else None
+        remind = db.shift(remind, rec) if remind else None
         anchor = remind or due
         if anchor is None or anchor > cur:
             break
@@ -319,48 +254,3 @@ def find_gcal(event_id: str) -> dict | None:
         (event_id, len(event_id) + 1, event_id + "_"),
     ).fetchone()
     return dict(row) if row else None
-
-
-# ---------- facts (long-term memory about the user) ----------
-def add_fact(fact: str) -> int:
-    cur = conn.execute("INSERT INTO facts(fact,created_at) VALUES(?,?)", (fact.strip(), fmt(now())))
-    conn.commit()
-    return cur.lastrowid
-
-
-def delete_fact(fact_id: int) -> bool:
-    cur = conn.execute("DELETE FROM facts WHERE id=?", (fact_id,))
-    conn.commit()
-    return cur.rowcount > 0
-
-
-def list_facts() -> list[dict]:
-    return [dict(r) for r in conn.execute("SELECT id, fact FROM facts ORDER BY id")]
-
-
-# ---------- chat history ----------
-def add_message(role: str, content: str) -> None:
-    conn.execute("INSERT INTO messages(role,content) VALUES(?,?)", (role, content))
-    conn.commit()
-
-
-def recent_messages(n: int) -> list[dict]:
-    rows = conn.execute("SELECT role, content FROM messages ORDER BY id DESC LIMIT ?", (n,)).fetchall()
-    return [dict(r) for r in reversed(rows)]
-
-
-def clear_messages() -> None:
-    conn.execute("DELETE FROM messages")
-    conn.commit()
-
-
-# ---------- meta ----------
-def get_meta(key: str) -> str | None:
-    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else None
-
-
-def set_meta(key: str, value: str) -> None:
-    conn.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                 (key, value))
-    conn.commit()

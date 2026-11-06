@@ -1,8 +1,10 @@
-"""Voice channels: hear everyone, act on "<wake word>, ...", reply in text and out loud.
+"""Voice channels (Discord front-end): hear everyone, reply in text and out loud.
 
 Pipeline:  Discord voice ─► (DAVE decrypt) ─► per-speaker buffer ─► Whisper (speech→text)
-           ─► wake word? ─► agent.chat() ─► text reply + Kokoro (text→speech) back into the call.
+           ─► wake word? ─► core.agent.chat(mode="voice") ─► text reply + Kokoro (text→speech) back into the call.
 Everything runs locally: Whisper on the GPU (CPU fallback), Kokoro on the CPU (~4x realtime).
+How the assistant *talks* in voice (style, spoken clean-up) is the `voice` skill in skills/voice.py;
+each call is its own conversation, and friends in the call are guests (owner_only tools are hidden).
 """
 import asyncio
 import glob
@@ -21,7 +23,8 @@ from pathlib import Path
 import numpy as np
 
 import config
-import db
+from core import agent, db
+from core.tools import ToolContext
 
 # faster-whisper needs NVIDIA's cuBLAS/cuDNN DLLs; on Windows they come from the nvidia-* pip
 # packages and must be on the DLL search path before ctranslate2 loads.
@@ -47,7 +50,6 @@ FOLLOW_UP_WINDOW = 8.0       # after a bare "Bub?", the next sentence counts as 
 WAKE_FUZZY = 0.75            # how close a misheard word must be to a wake word (1.0 = exact)
 FILLER_AFTER = 2.5           # say "one sec" if the model takes longer than this to answer
 SENTENCE_GAP = 0.12          # pause between spoken sentences, seconds
-CALL_MEMORY = 10             # how many recent messages from this call the model sees
 VOICES_DIR = Path(config.DB_PATH).parent / "voices"
 KOKORO_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 KOKORO_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
@@ -417,18 +419,18 @@ class _Sink(voice_recv.AudioSink):
 
 
 class VoiceSession:
-    def __init__(self, vc, text_dest, chat, llm_lock: asyncio.Lock):
+    def __init__(self, vc, text_dest):
         self.vc = vc
         self.text_dest = text_dest  # where transcripts and replies are posted
-        self.chat = chat
-        self.llm_lock = llm_lock
+        # Each call is its own conversation, so follow-ups ("and tomorrow?") make sense and the DM
+        # history (full of formatted lists and old topics) doesn't leak into spoken replies.
+        self.conversation = f"voice:{vc.channel.id}:{int(time.time())}"
         self.lock = threading.Lock()
         self.speakers: dict[int, _Speaker] = {}
         self.names: dict[int, str] = {}
         self.armed: dict[int, float] = {}  # user id → until when a follow-up counts as a command
         self.queue: asyncio.Queue = asyncio.Queue()
         self.cache: dict[str, bytes] = {}  # pre-synthesized short phrases (acks, fillers)
-        self.turns: list[dict] = []  # this call's conversation, so follow-ups ("and tomorrow?") make sense
         self.tasks = [asyncio.create_task(t) for t in (self._flusher(), self._worker(), self._stats(),
                                                         self._precache())]
 
@@ -531,21 +533,18 @@ class VoiceSession:
             return await self.say(random.choice(ACKS))
 
         await self.text_dest.send(f"🎙️ **{name}:** {command}")
-        owner = uid == config.OWNER_ID
-        who = "the user themself" if owner else f"{name}, a friend of the user in the call (not the user)"
-        async with self.llm_lock:
-            said = command if owner else f"({name} says) {command}"
-            reply_task = asyncio.create_task(
-                self.chat(said, voice=who, guest=not owner, history=self.turns[-CALL_MEMORY:]))
-            done, _ = await asyncio.wait({reply_task}, timeout=FILLER_AFTER)
-            if not done:
-                await self.say(random.choice(FILLERS))  # slow model: let them know we heard
-            try:
-                reply = await reply_task
-            except Exception as e:
-                reply = f"Sorry, I couldn't reach my brain just now. ({e.__class__.__name__})"
-        spoken = "\n".join(ln for ln in reply.splitlines() if not ln.lstrip().startswith("-#")).strip()
-        self.turns += [{"role": "user", "content": said}, {"role": "assistant", "content": spoken}]
+        # A friend in the call is a guest: the agent attributes their words, hides owner_only tools
+        # (memories, check-ins) and leaves out the owner's pending check-in.
+        ctx = ToolContext(conversation=self.conversation, speaker=name, is_owner=uid == config.OWNER_ID,
+                          mode="voice", frontend="discord-voice")
+        reply_task = asyncio.create_task(agent.chat(command, ctx))
+        done, _ = await asyncio.wait({reply_task}, timeout=FILLER_AFTER)
+        if not done:
+            await self.say(random.choice(FILLERS))  # slow model: let them know we heard
+        try:
+            reply = await reply_task
+        except Exception as e:
+            reply = f"Sorry, I couldn't reach my brain just now. ({e.__class__.__name__})"
         await self.text_dest.send(reply[:1900])
         await self.say(reply)
 
@@ -602,7 +601,7 @@ def owner_voice_channel(bot: discord.Client):
     return None
 
 
-async def join(channel, text_dest, chat, llm_lock) -> str:
+async def join(channel, text_dest) -> str:
     global session
     if session:
         await leave()
@@ -610,7 +609,7 @@ async def join(channel, text_dest, chat, llm_lock) -> str:
     if config.VOICE_REPLIES:
         await asyncio.to_thread(_load_tts)  # first time: downloads Kokoro (~350 MB)
     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-    session = VoiceSession(vc, text_dest, chat, llm_lock)
+    session = VoiceSession(vc, text_dest)
     vc.listen(_Sink(session))
     if config.VOICE_DEBUG:
         state = vc._connection
