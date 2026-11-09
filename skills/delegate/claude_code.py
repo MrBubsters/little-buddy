@@ -42,8 +42,9 @@ class Outcome:
     @property
     def error_hint(self) -> str:
         return {
-            "auth": "Claude Code isn't logged in on this machine (or the token expired). Run `claude` there and log in.",
-            "limit": "Claude's usage limit was hit. Wait for the window to reset, or raise the plan.",
+            "auth": "The worker's credentials are missing or expired: log in to Claude Code on this machine, or check "
+                    "the provider API key in .env.",
+            "limit": "The provider's usage or rate limit was hit. Wait for it to reset, or use another tier.",
             "budget": f"The run hit its ${config.AGENT_MAX_BUDGET_USD:.2f} budget before finishing.",
             "timeout": f"The run exceeded {config.AGENT_TIMEOUT_MINUTES} minutes and was stopped.",
             "stopped": "The run was stopped.",

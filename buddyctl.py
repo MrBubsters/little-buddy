@@ -2,7 +2,7 @@
 """Talk to little-buddy from another machine over its HTTP API. Needs only Python 3, no packages.
 
     buddyctl ask "what's on today"                      a message, through the assistant
-    buddyctl run --repo minecraft-ai "Fix the ..."      a coding task straight to the queue (--model opus)
+    buddyctl run --repo minecraft-ai "Fix the ..."      a coding task straight to the queue (--worker cheap|standard|strong)
     buddyctl tasks                                      recent tasks
     buddyctl task 3 [--watch]                           one task, optionally wait for it to finish
     buddyctl continue 3 "Also add a regression test"    follow up
@@ -54,7 +54,7 @@ def call(method: str, path: str, body: dict | None = None, timeout: float = 600)
 
 
 def fmt(t: dict) -> str:
-    line = f"#{t['id']:<4} {t['status']:<16} {t['repository']:<14} {t['model']:<6} ${t['cost_usd'] or 0:.2f}  {t['objective'][:60]}"
+    line = f"#{t['id']:<4} {t['status']:<16} {t['repository']:<14} {t.get('tier', ''):<9} ${t['cost_usd'] or 0:.2f}  {t['objective'][:60]}"
     return line + (f"\n      {t['pr_url']}" if t.get("pr_url") else "")
 
 
@@ -74,7 +74,7 @@ def main(argv: list[str]) -> None:
     p = argparse.ArgumentParser(prog="buddyctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("ask"); a.add_argument("text", nargs="+")
-    r = sub.add_parser("run"); r.add_argument("--repo", required=True); r.add_argument("--model", default="sonnet")
+    r = sub.add_parser("run"); r.add_argument("--repo", required=True); r.add_argument("--worker", default=None, help="cheap | standard | strong (server default if omitted)")
     r.add_argument("--watch", action="store_true"); r.add_argument("text", nargs="+")
     sub.add_parser("tasks")
     t = sub.add_parser("task"); t.add_argument("id", type=int); t.add_argument("--watch", action="store_true")
@@ -91,7 +91,7 @@ def main(argv: list[str]) -> None:
         for task in call("GET", "/tasks"):
             print(fmt(task))
     elif args.cmd == "run":
-        task = call("POST", "/tasks", {"objective": " ".join(args.text), "repository": args.repo, "model": args.model})
+        task = call("POST", "/tasks", {"objective": " ".join(args.text), "repository": args.repo, "worker": args.worker})
         print(f"queued task #{task['id']}")
         if args.watch:
             watch(task["id"])

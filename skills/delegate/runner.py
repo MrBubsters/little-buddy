@@ -6,7 +6,9 @@ from datetime import datetime
 
 import config
 from core.app import app
-from skills.delegate import claude_code, store
+from skills.delegate import claude_code, opencode, store
+
+BACKENDS = {"claude": claude_code, "opencode": opencode}
 
 ACTIVE: dict[int, asyncio.Task] = {}   # task id -> the asyncio task executing its run
 LIVE: dict[int, dict] = {}             # task id -> {"started_at", "tools", "last"} for status displays
@@ -41,7 +43,8 @@ async def tick() -> None:
         store.update_run(run["id"], status="running", started_at=store.ts())
         store.update_task(task["id"], status="running")
         LIVE[task["id"]] = {"started_at": store.ts(), "tools": 0, "last": ""}
-        print(f"[delegate] task #{task['id']} run #{run['id']} starting: {task['repository']} ({task['model']})")
+        print(f"[delegate] task #{task['id']} run #{run['id']} starting: {task['repository']} "
+              f"({task['tier']}: {task['backend']} {task['model']})")
         ACTIVE[task["id"]] = asyncio.create_task(_execute(task, run))
 
 
@@ -75,7 +78,10 @@ async def _work(task: dict, run: dict) -> claude_code.Outcome:
     def progress(n: int, last: str) -> None:
         LIVE.get(task["id"], {}).update(tools=n, last=last)
 
-    return await claude_code.run(
+    backend = BACKENDS.get(task["backend"])
+    if not backend:
+        raise RuntimeError(f"unknown backend '{task['backend']}'")
+    return await backend.run(
         run["prompt"], task["worktree"], model=task["model"], budget_usd=config.AGENT_MAX_BUDGET_USD,
         system_prompt=system, resume=task["session_id"], key=task["id"],
         timeout_s=config.AGENT_TIMEOUT_MINUTES * 60, on_progress=progress)
@@ -101,7 +107,7 @@ async def _finish(task: dict, run: dict, o: claude_code.Outcome, live: dict) -> 
 def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
     word = {"awaiting_review": "done, PR ready for review", "completed": "done (no PR)",
             "failed": "failed", "cancelled": "stopped"}[t["status"]]
-    head = f"{store.ICONS[t['status']]} Task #{t['id']} ({t['repository']}) {word}"
+    head = f"{store.ICONS[t['status']]} Task #{t['id']} ({t['repository']}, {t['tier']}: {t['model']}) {word}"
     body = o.text if len(o.text) <= 1500 else o.text[:1500] + "…"
     lines = [head, body]
     if o.error_hint:

@@ -19,7 +19,9 @@ from skills.delegate import runner, store
 
 REPOS = tuple(config.AGENT_REPOS) or ("none",)
 Repository = Literal[REPOS]  # type: ignore[valid-type]
-Model = Literal["sonnet", "opus"]
+TIERS = tuple(config.AGENT_TIERS)
+Worker = Literal[TIERS]  # type: ignore[valid-type]
+_TIER_LIST = "; ".join(f"{t} = {m} via {'Claude Code' if b == 'claude' else 'OpenCode'}" for t, (b, m) in config.AGENT_TIERS.items())
 
 GUIDE = f"""Delegating coding work:
 - When {{owner}} wants code written, fixed, investigated or reviewed in one of these repositories \
@@ -27,7 +29,9 @@ GUIDE = f"""Delegating coding work:
 request; you'll be told when it finishes. Don't attempt the coding yourself and don't guess at the outcome.
 - The objective is the ONLY thing the agent sees. Write a complete brief in 2-5 sentences: what's wrong or wanted, \
 where to look if known, and what done looks like. Don't invent file paths, branch names or details you weren't given.
-- model: "sonnet" unless {{owner}} explicitly asks for opus or "the strong model".
+- worker: "cheap" for documentation, summaries, small well-defined changes and PR chores; "standard" for ordinary \
+bug fixes and features; "strong" only when {{owner}} asks for it. If they name a model or provider (GPT, Luna, opus, \
+Claude), pick the tier that uses it. Tiers: {_TIER_LIST}.
 - After delegating, tell them the task number and that `!cancel <number>` stops it. Don't promise how long it takes.
 - Follow-ups on a finished task ("also add tests", "the PR fails CI") go through continue_task with its number.
 - task_status answers "how's the pathfinding fix going"."""
@@ -40,16 +44,17 @@ def _enabled() -> bool:
 # ---------- tools ----------
 @tool(writes=True, owner_only=True, enabled=_enabled)
 def delegate_task(objective: Annotated[str, "Complete brief for the agent: the problem or goal, where to look, what done looks like."],
-                  repository: Repository, model: Model = "sonnet", ctx: ToolContext = None) -> str:
-    """Hand a coding task to a Claude Code agent that works in the background and opens a pull request."""
+                  repository: Repository, worker: Annotated[Worker, "Which tier of agent should do it."] = None,
+                  ctx: ToolContext = None) -> str:
+    """Hand a coding task to a coding agent that works in the background and opens a pull request."""
     if repository not in config.AGENT_REPOS:
         return f"Error: unknown repository '{repository}'. Options: {', '.join(config.AGENT_REPOS)}."
     if len(objective.strip()) < 20:
         return "Error: the objective is too short to act on. Describe the problem or goal fully."
-    if model not in ("sonnet", "opus"):
-        model = config.AGENT_DEFAULT_MODEL
-    t = store.create_task(objective, repository, model, origin=ctx.frontend if ctx else "discord")
-    return (f"Queued task #{t['id']} for {repository} ({model}). It starts within 30 seconds; "
+    worker = worker if worker in config.AGENT_TIERS else config.AGENT_DEFAULT_TIER
+    backend, model = config.AGENT_TIERS[worker]
+    t = store.create_task(objective, repository, worker, backend, model, origin=ctx.frontend if ctx else "discord")
+    return (f"Queued task #{t['id']} for {repository} ({worker}: {model}). It starts within 30 seconds; "
             f"`!cancel {t['id']}` stops it. The result will be sent when it's done.")
 
 
@@ -139,14 +144,16 @@ async def _api_create(request: web.Request) -> web.Response:
     data = await request.json()
     objective = (data.get("objective") or "").strip()
     repository = data.get("repository") or ""
-    model = data.get("model") or config.AGENT_DEFAULT_MODEL
+    worker = data.get("worker") or config.AGENT_DEFAULT_TIER
     if repository not in config.AGENT_REPOS:
         return web.json_response({"error": f"unknown repository; options: {', '.join(config.AGENT_REPOS)}"}, status=400)
     if len(objective) < 20:
         return web.json_response({"error": "objective too short"}, status=400)
-    if model not in ("sonnet", "opus"):
-        return web.json_response({"error": "model must be sonnet or opus"}, status=400)
-    return web.json_response(_json_task(store.create_task(objective, repository, model, origin="api")), status=201)
+    if worker not in config.AGENT_TIERS:
+        return web.json_response({"error": f"unknown worker; options: {', '.join(config.AGENT_TIERS)}"}, status=400)
+    backend, model = config.AGENT_TIERS[worker]
+    return web.json_response(_json_task(store.create_task(objective, repository, worker, backend, model, origin="api")),
+                             status=201)
 
 
 async def _api_list(request: web.Request) -> web.Response:
