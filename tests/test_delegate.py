@@ -19,12 +19,16 @@ for cmd in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email",
             ["git", "config", "user.name", "Test"], ["git", "commit", "-q", "--allow-empty", "-m", "init"]):
     subprocess.run(cmd, cwd=_repo, check=True)
 _fake = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_claude.py")
+_fake_oc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_opencode.py")
 _log = os.path.join(_tmp, "claude-calls.jsonl")
+_oc_log = os.path.join(_tmp, "opencode-calls.jsonl")
+_TIERS = "cheap=opencode:openai/gpt-6-luna,standard=claude:sonnet,strong=claude:opus"
 
 os.environ.update(DB_PATH=os.path.join(_tmp, "test.db"), GCAL_ENABLED="false", WEB_ENABLED="false",
                   PERSONA_FILE=os.path.join(_tmp, "none.md"), TIMEZONE="UTC", EMBED_MODEL="", LLM_CONTEXT="8192",
                   OWNER_NAME="Sam", AGENT_REPOS=f"demo={_repo}", CLAUDE_PATH=_fake, API_TOKEN="secret-token",
-                  AGENT_WORKTREES=os.path.join(_tmp, "worktrees"), FAKE_CLAUDE_LOG=_log)
+                  AGENT_WORKTREES=os.path.join(_tmp, "worktrees"), FAKE_CLAUDE_LOG=_log, FAKE_OPENCODE_LOG=_oc_log,
+                  OPENCODE_PATH=_fake_oc, AGENT_TIERS=_TIERS)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
@@ -32,6 +36,9 @@ import config  # noqa: E402
 # When run together with test_core, config was imported first with different settings: apply ours.
 config.AGENT_REPOS = {"demo": _repo}
 config.CLAUDE_PATH = _fake
+config.OPENCODE_PATH = _fake_oc
+config.AGENT_TIERS = {"cheap": ("opencode", "openai/gpt-6-luna"), "standard": ("claude", "sonnet"), "strong": ("claude", "opus")}
+config.AGENT_DEFAULT_TIER = "standard"
 config.API_TOKEN = "secret-token"
 config.AGENT_WORKTREES = os.path.join(_tmp, "worktrees")
 config.AGENT_MAX_BUDGET_USD, config.AGENT_MONTHLY_BUDGET_USD = 5.0, 50.0
@@ -77,8 +84,10 @@ class DelegateTest(unittest.TestCase):
             self.sent.append(text)
         app.attach("test", notify)
         os.environ["FAKE_CLAUDE"] = "ok"
-        if os.path.exists(_log):
-            os.remove(_log)
+        os.environ["FAKE_OPENCODE"] = "ok"
+        for f in (_log, _oc_log):
+            if os.path.exists(f):
+                os.remove(f)
         run(skills.run_hooks("on_start"))
 
     def delegate(self, **over) -> dict:
@@ -90,6 +99,7 @@ class DelegateTest(unittest.TestCase):
     def test_schema_lists_repositories(self):
         schema = REGISTRY.get("delegate_task").schema()["function"]["parameters"]
         self.assertEqual(schema["properties"]["repository"]["enum"], ["demo"])
+        self.assertEqual(schema["properties"]["worker"]["enum"], ["cheap", "standard", "strong"])
         self.assertEqual(schema["required"], ["objective", "repository"])
         self.assertIn("delegate_task", [t.name for t in REGISTRY.available(ToolContext())])
 
@@ -207,10 +217,13 @@ class DelegateTest(unittest.TestCase):
                 self.assertTrue((await (await c.get("/health", headers=AUTH)).json())["ok"])
                 r = await c.post("/tasks", json={"objective": "short", "repository": "demo"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
-                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "model": "opus"}, headers=AUTH)
+                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "worker": "turbo"}, headers=AUTH)
+                self.assertEqual(r.status, 400)
+                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "worker": "strong"}, headers=AUTH)
                 self.assertEqual(r.status, 201)
                 task = await r.json()
-                self.assertEqual((task["origin"], task["model"], task["status"]), ("api", "opus", "queued"))
+                self.assertEqual((task["origin"], task["tier"], task["backend"], task["model"], task["status"]),
+                                 ("api", "strong", "claude", "opus", "queued"))
                 r = await c.get(f"/tasks/{task['id']}", headers=AUTH)
                 self.assertEqual(len((await r.json())["runs"]), 1)
                 self.assertEqual(len(await (await c.get("/tasks", headers=AUTH)).json()), 1)
@@ -221,6 +234,93 @@ class DelegateTest(unittest.TestCase):
                 self.assertEqual((await (await c.get(f"/tasks/{task['id']}", headers=AUTH)).json())["status"], "cancelled")
                 self.assertEqual((await c.get("/tasks/999", headers=AUTH)).status, 404)
         run(go())
+
+
+def oc_calls() -> list[dict]:
+    if not os.path.exists(_oc_log):
+        return []
+    with open(_oc_log, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+class OpenCodeTest(DelegateTest):
+    """The cheap tier runs through OpenCode with the same queue, worktree and reporting."""
+
+    def test_cheap_tier_runs_through_opencode(self):
+        t = self.delegate(worker="cheap")
+        self.assertEqual((t["tier"], t["backend"], t["model"]), ("cheap", "opencode", "openai/gpt-6-luna"))
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "awaiting_review")
+        self.assertEqual(t["pr_url"], "https://github.com/MrBubsters/demo/pull/8")
+        self.assertEqual(t["session_id"], "ses_ok")
+        self.assertAlmostEqual(t["cost_usd"], 0.03)
+        self.assertEqual(calls(), [])  # claude was not used
+        call = oc_calls()[0]
+        self.assertEqual(call["argv"][:4], ["run", "--format", "json", "--model"])
+        self.assertEqual(call["argv"][4], "openai/gpt-6-luna")
+        self.assertEqual(os.path.realpath(call["argv"][call["argv"].index("--dir") + 1]), os.path.realpath(t["worktree"]))
+        self.assertTrue(call["prompt"].endswith(OBJECTIVE))
+        self.assertIn("pull request", call["prompt"])  # the brief carries the instructions
+        self.assertNotIn("--session", call["argv"])
+        r = store.task_runs(t["id"])[0]
+        self.assertEqual((r["status"], r["tools"], r["turns"]), ("completed", 1, 2))
+        self.assertIn("cheap: openai/gpt-6-luna", self.sent[0])
+
+    def test_continue_passes_session(self):
+        t = self.delegate(worker="cheap")
+        run(drain())
+        run(REGISTRY.run("continue_task", {"task": t["id"], "message": "Also fix the typos in CONTRIBUTING."}, ToolContext()))
+        run(drain())
+        argv = oc_calls()[1]["argv"]
+        self.assertEqual(argv[argv.index("--session") + 1], "ses_ok")
+        self.assertEqual(store.get_task(t["id"])["session_id"], "ses_resumed")
+
+    def test_auth_error_and_denials(self):
+        os.environ["FAKE_OPENCODE"] = "auth"
+        t = self.delegate(worker="cheap")
+        run(drain())
+        self.assertEqual(store.task_runs(t["id"])[0]["error"], "auth")
+        self.assertIn("API key", self.sent[0])
+        os.environ["FAKE_OPENCODE"] = "credits"
+        tc = self.delegate(worker="cheap")
+        run(drain())
+        self.assertEqual(store.task_runs(tc["id"])[0]["error"], "limit")
+        self.assertIn("add credits", self.sent[1])
+        os.environ["FAKE_OPENCODE"] = "denied"
+        t2 = self.delegate(worker="cheap")
+        run(drain())
+        self.assertEqual(store.get_task(t2["id"])["status"], "awaiting_review")
+        self.assertIn("1 tool call(s) were blocked", self.sent[2])
+
+    def test_nonzero_exit_with_pr_counts_as_done(self):
+        os.environ["FAKE_OPENCODE"] = "exit1"
+        original = runner._pr_for_branch
+
+        async def fake_pr(task):
+            return f"https://github.com/MrBubsters/demo/pull/9" if task["branch"] == f"agent/task-{task['id']}" else None
+        runner._pr_for_branch = fake_pr
+        try:
+            t = self.delegate(worker="cheap")
+            run(drain())
+        finally:
+            runner._pr_for_branch = original
+        t = store.get_task(t["id"])
+        self.assertEqual((t["status"], t["pr_url"]), ("awaiting_review", "https://github.com/MrBubsters/demo/pull/9"))
+        r = store.task_runs(t["id"])[0]
+        self.assertEqual((r["status"], r["exit_code"], r["error"]), ("completed", 1, None))
+        self.assertIn("exited with an error code", self.sent[0])
+        self.assertIn("pull/9", self.sent[0])
+
+    def test_budget_stops_the_run(self):
+        os.environ["FAKE_OPENCODE"] = "expensive"
+        t = self.delegate(worker="cheap")
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "failed")
+        self.assertEqual(store.task_runs(t["id"])[0]["error"], "budget")
+        self.assertGreater(t["cost_usd"], 5)
+        self.assertIn("budget", self.sent[0])
 
 
 if __name__ == "__main__":

@@ -111,18 +111,38 @@ def _repos(spec: str) -> dict[str, str]:
     return out
 
 
-def _find_claude() -> str:
-    for p in (os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude"):
-        if os.path.exists(p):
-            return p
-    return "claude"
+def _find(name: str) -> str:
+    """A CLI the service can't find through PATH (systemd services don't load your shell profile)."""
+    import glob
+    home = os.path.expanduser("~")
+    candidates = [os.path.join(home, ".local", "bin", name), os.path.join("/usr/local/bin", name),
+                  os.path.join(home, ".opencode", "bin", name),
+                  *sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin", name)), reverse=True)]
+    return next((c for c in candidates if os.path.exists(c)), name)
+
+
+def _tiers(spec: str) -> dict[str, tuple[str, str]]:
+    """"cheap=opencode:openai/gpt-6-luna,standard=claude:sonnet" -> {tier: (backend, model)}."""
+    out = {}
+    for part in spec.split(","):
+        tier, _, rest = part.strip().partition("=")
+        backend, _, model = rest.strip().partition(":")
+        if tier and backend in ("claude", "opencode") and model:
+            out[tier.strip()] = (backend, model.strip())
+    return out
 
 
 # Repositories a Claude Code agent may work in, as name=path pairs. Empty = delegation off.
 AGENT_REPOS = _repos(os.getenv("AGENT_REPOS", ""))
 # Path to the Claude Code CLI (services don't get your shell's PATH).
-CLAUDE_PATH = os.getenv("CLAUDE_PATH", "") or _find_claude()
-AGENT_DEFAULT_MODEL = os.getenv("AGENT_DEFAULT_MODEL", "sonnet")
+CLAUDE_PATH = os.getenv("CLAUDE_PATH", "") or _find("claude")
+# Path to the OpenCode CLI (used by tiers with the "opencode" backend).
+OPENCODE_PATH = os.getenv("OPENCODE_PATH", "") or _find("opencode")
+# Worker tiers the model may pick, as tier=backend:model. Backends: "claude" (Claude Code; model sonnet|opus)
+# or "opencode" (OpenCode; model as provider/model, e.g. openai/gpt-6-luna).
+AGENT_TIERS = _tiers(os.getenv("AGENT_TIERS", "standard=claude:sonnet,strong=claude:opus")) \
+    or {"standard": ("claude", "sonnet")}
+AGENT_DEFAULT_TIER = os.getenv("AGENT_DEFAULT_TIER", "") or ("standard" if "standard" in AGENT_TIERS else next(iter(AGENT_TIERS)))
 AGENT_MAX_BUDGET_USD = float(os.getenv("AGENT_MAX_BUDGET_USD", "5"))        # per run (--max-budget-usd)
 AGENT_MONTHLY_BUDGET_USD = float(os.getenv("AGENT_MONTHLY_BUDGET_USD", "50"))  # sum of recorded run costs
 AGENT_MAX_CONCURRENT = int(os.getenv("AGENT_MAX_CONCURRENT", "1"))

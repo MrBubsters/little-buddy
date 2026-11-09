@@ -26,7 +26,7 @@ assistant automatically uses more of whatever hardware you give it.
 - 📝 **Daily work check-in:** asks what you got done and keeps asking until you answer.
 - 📆 **Google Calendar sync (optional):** two-way, with your own free Google API credentials.
 - 🌐 **Web search (optional, off by default):** looks things up and reads pages.
-- 🛠️ **Delegates coding work (optional):** "fix the pathfinding in the Minecraft bot and open a PR" hands the job to a [Claude Code](https://code.claude.com) agent working in its own git worktree, with budgets and an allowlist of repositories. See [docs/delegation.md](docs/delegation.md).
+- 🛠️ **Delegates coding work (optional):** "fix the pathfinding in the Minecraft bot and open a PR" hands the job to a coding agent ([Claude Code](https://code.claude.com) on your subscription, or any model through [OpenCode](https://opencode.ai)) working in its own git worktree, with tiers, budgets and an allowlist of repositories. See [docs/delegation.md](docs/delegation.md).
 - 🖧 **Remote CLI (optional):** `buddyctl.py` talks to the bot from another computer over a token-protected HTTP API.
 - 🧩 **Skills:** drop a Python file in `skills/` to add tools, commands, live context or scheduled behaviour. See [docs/writing-skills.md](docs/writing-skills.md).
 - 🖥️ **Runs anywhere:** Windows, Linux (incl. headless servers as a service), macOS. GPU recommended, CPU works.

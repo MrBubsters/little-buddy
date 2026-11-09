@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS agent_runs(
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, id);
 """)
+db.add_column("agent_tasks", "backend", "TEXT NOT NULL DEFAULT 'claude'")
+db.add_column("agent_tasks", "tier", "TEXT NOT NULL DEFAULT 'standard'")
 
 _PR = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 
@@ -61,11 +63,11 @@ def _row(cur) -> dict | None:
 
 
 # ---------- tasks ----------
-def create_task(objective: str, repository: str, model: str, origin: str = "discord") -> dict:
+def create_task(objective: str, repository: str, tier: str, backend: str, model: str, origin: str = "discord") -> dict:
     now = ts()
     cur = db.conn.execute(
-        "INSERT INTO agent_tasks(objective,repository,model,origin,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-        (objective.strip(), repository, model, origin, now, now))
+        "INSERT INTO agent_tasks(objective,repository,tier,backend,model,origin,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?)", (objective.strip(), repository, tier, backend, model, origin, now, now))
     task_id = cur.lastrowid
     db.conn.execute("INSERT INTO agent_runs(task_id,prompt,created_at) VALUES(?,?,?)", (task_id, objective.strip(), now))
     db.conn.commit()
@@ -160,4 +162,4 @@ def describe(t: dict, live: dict | None = None) -> str:
         bits.append(t["pr_url"])
     if t["cost_usd"]:
         bits.append(f"${t['cost_usd']:.2f}")
-    return f"{icon} task #{t['id']} {t['repository']} ({t['model']}) {' · '.join(bits)} — {t['objective'][:70]}"
+    return f"{icon} task #{t['id']} {t['repository']} ({t['tier']}: {t['model']}) {' · '.join(bits)} — {t['objective'][:70]}"
