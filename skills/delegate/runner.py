@@ -115,6 +115,8 @@ def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
     head = f"{store.ICONS[t['status']]} Task #{t['id']} ({t['repository']}, {t['tier']}: {t['model']}) {word}"
     body = o.text if len(o.text) <= 1500 else o.text[:1500] + "…"
     lines = [head, body]
+    if t["pr_url"] and t["pr_url"] not in body:
+        lines.append(f"PR: {t['pr_url']}")
     if o.error_hint:
         lines.append(o.error_hint)
     mins = 0
