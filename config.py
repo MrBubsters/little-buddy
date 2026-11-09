@@ -98,3 +98,40 @@ GCAL_EVENT_MINUTES = int(os.getenv("GCAL_EVENT_MINUTES", "60"))  # default lengt
 
 def owner() -> str:
     return OWNER_NAME or "the user"
+
+
+# --- Delegation to coding agents (skills/delegate) ------------------------------------------
+def _repos(spec: str) -> dict[str, str]:
+    """"name=/path,other=/path2" -> {name: absolute path}. Only these repositories can be worked on."""
+    out = {}
+    for part in spec.split(","):
+        name, _, path = part.strip().partition("=")
+        if name and path:
+            out[name.strip()] = os.path.abspath(os.path.expanduser(path.strip()))
+    return out
+
+
+def _find_claude() -> str:
+    for p in (os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude"):
+        if os.path.exists(p):
+            return p
+    return "claude"
+
+
+# Repositories a Claude Code agent may work in, as name=path pairs. Empty = delegation off.
+AGENT_REPOS = _repos(os.getenv("AGENT_REPOS", ""))
+# Path to the Claude Code CLI (services don't get your shell's PATH).
+CLAUDE_PATH = os.getenv("CLAUDE_PATH", "") or _find_claude()
+AGENT_DEFAULT_MODEL = os.getenv("AGENT_DEFAULT_MODEL", "sonnet")
+AGENT_MAX_BUDGET_USD = float(os.getenv("AGENT_MAX_BUDGET_USD", "5"))        # per run (--max-budget-usd)
+AGENT_MONTHLY_BUDGET_USD = float(os.getenv("AGENT_MONTHLY_BUDGET_USD", "50"))  # sum of recorded run costs
+AGENT_MAX_CONCURRENT = int(os.getenv("AGENT_MAX_CONCURRENT", "1"))
+AGENT_PERMISSION_MODE = os.getenv("AGENT_PERMISSION_MODE", "auto")
+AGENT_TIMEOUT_MINUTES = int(os.getenv("AGENT_TIMEOUT_MINUTES", "45"))
+# Where per-task git worktrees are created (outside the repositories themselves).
+AGENT_WORKTREES = os.path.expanduser(os.getenv("AGENT_WORKTREES", "~/.cache/little-buddy/worktrees"))
+
+# --- HTTP API for a remote CLI (buddyctl.py). Off unless API_TOKEN is set. -------------------
+API_HOST = os.getenv("API_HOST", "127.0.0.1")
+API_PORT = int(os.getenv("API_PORT", "8765"))
+API_TOKEN = os.getenv("API_TOKEN", "")
