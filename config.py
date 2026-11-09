@@ -134,6 +134,8 @@ def _tiers(spec: str) -> dict[str, tuple[str, str]]:
 
 # Repositories a Claude Code agent may work in, as name=path pairs. Empty = delegation off.
 AGENT_REPOS = _repos(os.getenv("AGENT_REPOS", ""))
+# Folder where tickets without a repository start a NEW local git project (empty = such tickets are refused).
+AGENT_NEW_PROJECTS = os.path.expanduser(os.getenv("AGENT_NEW_PROJECTS", ""))
 # Path to the Claude Code CLI (services don't get your shell's PATH).
 CLAUDE_PATH = os.getenv("CLAUDE_PATH", "") or _find("claude")
 # Path to the OpenCode CLI (used by tiers with the "opencode" backend).

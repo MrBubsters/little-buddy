@@ -51,6 +51,18 @@ db.add_column("agent_tasks", "backend", "TEXT NOT NULL DEFAULT 'claude'")
 db.add_column("agent_tasks", "tier", "TEXT NOT NULL DEFAULT 'standard'")
 
 _PR = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
+NEW = "new:"  # repository prefix for tickets that start a new local project
+
+
+def is_new_project(t: dict) -> bool:
+    return str(t.get("repository", "")).startswith(NEW)
+
+
+def slug(text: str, fallback: str = "project") -> str:
+    """'Server Perf Dashboard!' -> 'server-perf-dashboard' (max 40 chars)."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    out = "-".join(words)[:40].strip("-")
+    return out or fallback
 
 
 def ts() -> str:

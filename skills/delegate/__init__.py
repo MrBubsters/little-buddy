@@ -26,7 +26,8 @@ _TIER_LIST = ", ".join(f"{t}={m}" for t, (b, m) in config.AGENT_TIERS.items())
 GUIDE = f"""Coding tickets (code work handed to an agent that opens a PR; NOT planner items):
 - To get code written, fixed, investigated or reviewed, call open_ticket with a complete brief (what, where if known, \
 constraints, what done looks like). Never code yourself or guess the outcome.
-- repository: only if {{owner}} named one of {', '.join(REPOS)}; otherwise omit it and ask what the tool says. Never guess.
+- repository: one of {', '.join(REPOS)} ONLY if {{owner}} named it or clearly means that project. Otherwise omit it: \
+the work starts as a NEW local project (give a short project_name). Never guess a repository.
 - worker: cheap = docs, summaries, small well-defined changes; standard = normal fixes and features; strong = only \
 when asked. A named model or provider means its tier ({_TIER_LIST}).
 - "ticket 3" = a ticket (ticket_status, continue_ticket, `!cancel 3`); "task 30" or an agenda item = a planner item. \
@@ -42,19 +43,33 @@ def _enabled() -> bool:
 # ---------- tools ----------
 @tool(writes=True, owner_only=True, enabled=_enabled)
 def open_ticket(objective: Annotated[str, "Complete brief: goal or problem, where to look, constraints, what done looks like."],
-                repository: Repository = None, worker: Worker = None, ctx: ToolContext = None) -> str:
-    """Hand code work to a background agent that opens a pull request."""
-    if repository not in config.AGENT_REPOS:
-        return (f"Error: no repository given{'' if not repository else f' (unknown: {repository!r})'}. Ask {config.owner()} "
-                f"which one it's for: {', '.join(config.AGENT_REPOS)}. If none of these fits, say so; a new repository "
-                f"has to be created and added by them first.")
+                repository: Repository = None, worker: Worker = None,
+                project_name: Annotated[str, "For a new project only: short kebab-case name."] = "",
+                ctx: ToolContext = None) -> str:
+    """Hand code work to a background agent: a PR in an existing repository, or a new local project."""
     if len(objective.strip()) < 20:
         return "Error: the objective is too short to act on. Describe the problem or goal fully."
+    target, err = resolve_target(repository, project_name, objective)
+    if err:
+        return err
     worker = worker if worker in config.AGENT_TIERS else config.AGENT_DEFAULT_TIER
     backend, model = config.AGENT_TIERS[worker]
-    t = store.create_task(objective, repository, worker, backend, model, origin=ctx.frontend if ctx else "discord")
-    return (f"Queued ticket #{t['id']} for {repository} ({worker}: {model}). It starts within 30 seconds; "
+    t = store.create_task(objective, target, worker, backend, model, origin=ctx.frontend if ctx else "discord")
+    where = f"a new project '{target[len(store.NEW):]}'" if target.startswith(store.NEW) else target
+    return (f"Queued ticket #{t['id']} for {where} ({worker}: {model}). It starts within 30 seconds; "
             f"`!cancel {t['id']}` stops it. The result will be sent when it's done.")
+
+
+def resolve_target(repository: str | None, project_name: str, objective: str) -> tuple[str, str | None]:
+    """(repository value for the ticket, error). No repository -> a new project when AGENT_NEW_PROJECTS is set."""
+    if repository in config.AGENT_REPOS:
+        return repository, None
+    if repository:
+        return "", f"Error: unknown repository {repository!r}. Options: {', '.join(config.AGENT_REPOS)}, or omit it for a new project."
+    if not config.AGENT_NEW_PROJECTS:
+        return "", (f"Error: no repository given and new projects are off. Ask {config.owner()} which repository: "
+                    f"{', '.join(config.AGENT_REPOS)}.")
+    return store.NEW + store.slug(project_name or " ".join(objective.split()[:4])), None
 
 
 @tool(owner_only=True, enabled=_enabled)
@@ -142,12 +157,12 @@ def _json_task(t: dict, runs: bool = False) -> dict:
 async def _api_create(request: web.Request) -> web.Response:
     data = await request.json()
     objective = (data.get("objective") or "").strip()
-    repository = data.get("repository") or ""
     worker = data.get("worker") or config.AGENT_DEFAULT_TIER
-    if repository not in config.AGENT_REPOS:
-        return web.json_response({"error": f"unknown repository; options: {', '.join(config.AGENT_REPOS)}"}, status=400)
     if len(objective) < 20:
         return web.json_response({"error": "objective too short"}, status=400)
+    repository, err = resolve_target(data.get("repository") or None, data.get("project_name") or "", objective)
+    if err:
+        return web.json_response({"error": err[7:]}, status=400)
     if worker not in config.AGENT_TIERS:
         return web.json_response({"error": f"unknown worker; options: {', '.join(config.AGENT_TIERS)}"}, status=400)
     backend, model = config.AGENT_TIERS[worker]

@@ -53,6 +53,7 @@ and permissions are fixed in `.env`.
    AGENT_MONTHLY_BUDGET_USD=50
    AGENT_MAX_CONCURRENT=1
    ```
+   Add `AGENT_NEW_PROJECTS=~/new-projects` to let tickets that name no repository start a new local project there.
    A tier is `name=backend:model`. Backend `claude` takes `sonnet` or `opus`; backend `opencode` takes
    OpenCode's `provider/model`. Add a tier or swap a model here; nothing else changes.
 6. Restart the bot. `!skills` should list `delegate`, and `!status` shows the three extra tools.
@@ -67,7 +68,7 @@ cd ~/minecraft-ai && echo "say hi" | ~/.local/bin/claude -p --output-format json
 | You say / type | What happens |
 |---|---|
 | "Investigate why the minecraft bot walks into walls near water, fix it and open a PR" | The model calls `open_ticket`; you get "Queued ticket #3 … `!cancel 3` stops it". |
-| "Add a dashboard script" (no repository named) | The tool refuses to guess; the model asks which repository. Create and allowlist a repo first if none fits. |
+| "Build me a server dashboard" (no repository named) | A **new local project**: a fresh git repo under `AGENT_NEW_PROJECTS`, no remote, no PR. The agent builds and commits there and reports the path. Later: `!continue <n> the remote is github.com/you/name; add it as origin and push`. |
 | `!tickets` | Recent tickets with status, cost and PR links. |
 | `!ticket 3` | One ticket in detail: its runs and the agent's full summary. |
 | "how's the pathfinding fix going?" | The model answers from `ticket_status`. |
@@ -115,6 +116,7 @@ bearer token: keep it on your LAN or behind an SSH tunnel.
 | Setting | Meaning |
 |---|---|
 | `AGENT_REPOS` | `name=path,…`. Only these; the model picks a name, never a path. Empty = skill off. |
+| `AGENT_NEW_PROJECTS` | Folder where tickets without a repository start a new local git project. Empty = such tickets are refused. |
 | `CLAUDE_PATH` | The CLI binary. Default: `~/.local/bin/claude` if present. |
 | `AGENT_TIERS` / `AGENT_DEFAULT_TIER` | Worker tiers as `name=backend:model`, and the one used when unspecified. |
 | `OPENCODE_PATH` | The OpenCode CLI. Default: found under `~/.nvm`, `~/.opencode/bin` or `~/.local/bin`. |

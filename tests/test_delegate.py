@@ -39,6 +39,7 @@ config.CLAUDE_PATH = _fake
 config.OPENCODE_PATH = _fake_oc
 config.AGENT_TIERS = {"cheap": ("opencode", "openai/gpt-6-luna"), "standard": ("claude", "sonnet"), "strong": ("claude", "opus")}
 config.AGENT_DEFAULT_TIER = "standard"
+config.AGENT_NEW_PROJECTS = os.path.join(_tmp, "new-projects")
 config.API_TOKEN = "secret-token"
 config.AGENT_WORKTREES = os.path.join(_tmp, "worktrees")
 config.AGENT_MAX_BUDGET_USD, config.AGENT_MONTHLY_BUDGET_USD = 5.0, 50.0
@@ -103,14 +104,42 @@ class DelegateTest(unittest.TestCase):
         self.assertEqual(schema["required"], ["objective"])
         self.assertIn("open_ticket", [t.name for t in REGISTRY.available(ToolContext())])
 
-    def test_missing_repository_asks_instead_of_guessing(self):
-        out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE}, ToolContext()))
-        self.assertTrue(out.startswith("Error: no repository given"))
-        self.assertIn("demo", out)
-        self.assertEqual(store.list_tasks(), [])
+    def test_unknown_repository_is_refused(self):
         out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE, "repository": "other"}, ToolContext()))
         self.assertIn("unknown", out)
         self.assertEqual(store.list_tasks(), [])
+        config.AGENT_NEW_PROJECTS = ""
+        try:
+            out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE}, ToolContext()))
+            self.assertIn("new projects are off", out)
+            self.assertEqual(store.list_tasks(), [])
+        finally:
+            config.AGENT_NEW_PROJECTS = os.path.join(_tmp, "new-projects")
+
+    def test_no_repository_starts_a_new_local_project(self):
+        out = run(REGISTRY.run("open_ticket", {"objective": "Build a terminal dashboard showing CPU, memory and GPU use for this server.",
+                                               "project_name": "Perf Dashboard"}, ToolContext()))
+        self.assertIn("new project 'perf-dashboard'", out)
+        t = store.list_tasks()[0]
+        self.assertEqual(t["repository"], "new:perf-dashboard")
+        run(drain())
+        t = store.get_task(t["id"])
+        path = os.path.join(_tmp, "new-projects", "perf-dashboard")
+        self.assertEqual((t["status"], t["worktree"], t["branch"]), ("completed", path, "main"))
+        self.assertTrue(os.path.isdir(os.path.join(path, ".git")))
+        call = calls()[0]
+        self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(path))
+        system = call["argv"][call["argv"].index("--append-system-prompt") + 1]
+        self.assertIn("NEW project", system)
+        self.assertIn("Do not push", system)
+        self.assertIn(path, self.sent[0])
+        self.assertIn("no remote yet", self.sent[0])
+        # closing keeps the folder
+        self.assertIn("is kept", run(skills.run_command(f"!close {t['id']}", ToolContext())))
+        self.assertTrue(os.path.isdir(path))
+        # a name derived from the objective when none is given
+        out = run(REGISTRY.run("open_ticket", {"objective": "Write a CLI that renames photos by EXIF date, in Python."}, ToolContext()))
+        self.assertIn("new project 'write-a-cli-that'", out)
 
     def test_run_completes_in_worktree_and_notifies(self):
         t = self.delegate()
@@ -226,6 +255,11 @@ class DelegateTest(unittest.TestCase):
                 self.assertTrue((await (await c.get("/health", headers=AUTH)).json())["ok"])
                 r = await c.post("/tickets", json={"objective": "short", "repository": "demo"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "project_name": "api-thing"}, headers=AUTH)
+                self.assertEqual(r.status, 201)
+                self.assertEqual((await r.json())["repository"], "new:api-thing")
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "nope"}, headers=AUTH)
+                self.assertEqual(r.status, 400)
                 r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "demo", "worker": "turbo"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
                 r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "demo", "worker": "strong"}, headers=AUTH)
@@ -235,7 +269,7 @@ class DelegateTest(unittest.TestCase):
                                  ("api", "strong", "claude", "opus", "queued"))
                 r = await c.get(f"/tickets/{task['id']}", headers=AUTH)
                 self.assertEqual(len((await r.json())["runs"]), 1)
-                self.assertEqual(len(await (await c.get("/tickets", headers=AUTH)).json()), 1)
+                self.assertEqual(len(await (await c.get("/tickets", headers=AUTH)).json()), 2)
                 r = await c.post("/ask", json={"text": "!tickets"}, headers=AUTH)
                 self.assertIn(f"ticket #{task['id']}", (await r.json())["reply"])
                 r = await c.post(f"/tickets/{task['id']}/cancel", headers=AUTH)

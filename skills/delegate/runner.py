@@ -25,6 +25,18 @@ Your final message is sent to {owner} as-is: a short summary (Discord markdown, 
 you found, what you changed, how you verified it, and the PR URL."""
 
 
+NEW_PROJECT_PROMPT = """You were started unattended by {owner}'s personal assistant from a message they sent on Discord. \
+They are away from the machine and will read your result on their phone.
+You are starting a NEW project in {path}, a fresh git repository on branch main with no remote. Build it here: \
+choose a sensible structure, implement, add tests where they make sense, write a README with how to run it, and \
+commit on main with clear messages. Do not push and do not open a pull request: there is no remote yet. {owner} will \
+create one later and ask you to push.
+If the task is impossible, unsafe or too ambiguous, stop and say what you need instead of guessing. If a \
+discord_ask tool is available you may use it for one essential question.
+Your final message is sent to {owner} as-is: a short summary (Discord markdown, under 1500 characters) of what \
+you built, how to run it, how you verified it, and what's still open."""
+
+
 # ---------- queue ----------
 async def tick() -> None:
     while len(ACTIVE) < config.AGENT_MAX_CONCURRENT:
@@ -69,11 +81,14 @@ async def _execute(task: dict, run: dict) -> None:
 
 async def _work(task: dict, run: dict) -> claude_code.Outcome:
     if not task["worktree"] or not os.path.isdir(task["worktree"]):
-        path, branch, base = await _worktree(task)
+        path, branch, base = await (_new_project(task) if store.is_new_project(task) else _worktree(task))
         store.update_task(task["id"], worktree=path, branch=branch)
         task = store.get_task(task["id"])
-    base = await _default_branch(config.AGENT_REPOS[task["repository"]])
-    system = SYSTEM_PROMPT.format(owner=config.owner(), repo=task["repository"], branch=task["branch"], base=base)
+    if store.is_new_project(task):
+        system = NEW_PROJECT_PROMPT.format(owner=config.owner(), path=task["worktree"])
+    else:
+        base = await _default_branch(config.AGENT_REPOS[task["repository"]])
+        system = SYSTEM_PROMPT.format(owner=config.owner(), repo=task["repository"], branch=task["branch"], base=base)
 
     def progress(n: int, last: str) -> None:
         LIVE.get(task["id"], {}).update(tools=n, last=last)
@@ -89,7 +104,8 @@ async def _work(task: dict, run: dict) -> claude_code.Outcome:
 
 async def _finish(task: dict, run: dict, o: claude_code.Outcome, live: dict) -> None:
     task = store.get_task(task["id"])  # _work may have set the worktree and branch
-    pr = store.pr_url(o.text) or task["pr_url"] or await _pr_for_branch(task)
+    # A new local project has no remote, so any PR link in the summary would be invented.
+    pr = None if store.is_new_project(task) else (store.pr_url(o.text) or task["pr_url"] or await _pr_for_branch(task))
     if not o.ok and o.error_kind == "error" and o.text and pr:
         # The worker did the job (a PR exists) but exited non-zero, e.g. after provider rate-limit retries.
         o.ok, o.error_kind = True, None
@@ -110,8 +126,9 @@ async def _finish(task: dict, run: dict, o: claude_code.Outcome, live: dict) -> 
 
 
 def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
-    word = {"awaiting_review": "done, PR ready for review",
-            "completed": f"finished without a PR. If it's asking something, answer with `!continue {t['id']} <answer>`",
+    done_word = (f"finished; the project is at `{t['worktree']}` (no remote yet)" if store.is_new_project(t) else
+                 f"finished without a PR. If it's asking something, answer with `!continue {t['id']} <answer>`")
+    word = {"awaiting_review": "done, PR ready for review", "completed": done_word,
             "failed": "failed", "cancelled": "stopped"}[t["status"]]
     head = f"{store.ICONS[t['status']]} Ticket #{t['id']} ({t['repository']}, {t['tier']}: {t['model']}) {word}"
     body = o.text if len(o.text) <= 1500 else o.text[:1500] + "…"
@@ -127,7 +144,8 @@ def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
     if o.denials:
         meta += f" · {o.denials} tool call(s) denied by permission mode {config.AGENT_PERMISSION_MODE}"
     lines.append(meta)
-    lines.append(f"-# `!ticket {t['id']}` full result · `!continue {t['id']} <message>` follow up · `!close {t['id']}` when merged")
+    tail = ("`!close {id}` when you're done with it (the folder stays)" if store.is_new_project(t) else "`!close {id}` when merged")
+    lines.append(f"-# `!ticket {t['id']}` full result · `!continue {t['id']} <message>` follow up · " + tail.format(id=t["id"]))
     return "\n".join(x for x in lines if x)
 
 
@@ -171,6 +189,9 @@ async def close(task_id: int) -> str:
         return f"Error: no ticket #{task_id}."
     if t["status"] in store.TASK_ACTIVE:
         return f"Error: ticket #{task_id} is still {t['status']}."
+    if store.is_new_project(t):
+        store.update_task(task_id, status="closed")
+        return f"Closed ticket #{task_id}; the project folder {t['worktree']} is kept."
     if t["worktree"] and os.path.isdir(t["worktree"]):
         try:
             await _git(config.AGENT_REPOS[t["repository"]], "worktree", "remove", "--force", t["worktree"])
@@ -193,7 +214,7 @@ def recover() -> None:
 
 async def _pr_for_branch(task: dict) -> str | None:
     """The PR GitHub has for the task's branch, if any (workers sometimes forget to quote the URL)."""
-    if not task.get("branch") or not task.get("worktree") or not os.path.isdir(task["worktree"]):
+    if store.is_new_project(task) or not task.get("branch") or not task.get("worktree") or not os.path.isdir(task["worktree"]):
         return None
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -205,6 +226,20 @@ async def _pr_for_branch(task: dict) -> str | None:
         return None
     url = out.decode(errors="replace").strip()
     return url if url.startswith("http") else None
+
+
+async def _new_project(task: dict) -> tuple[str, str, str]:
+    """A fresh local repository under AGENT_NEW_PROJECTS for a ticket with no repository."""
+    if not config.AGENT_NEW_PROJECTS:
+        raise RuntimeError("AGENT_NEW_PROJECTS isn't set, so tickets without a repository can't start")
+    name = task["repository"][len(store.NEW):]
+    path = os.path.join(config.AGENT_NEW_PROJECTS, name)
+    if os.path.isdir(path) and not os.path.isdir(os.path.join(path, ".git")) and os.listdir(path):
+        raise RuntimeError(f"{path} exists and isn't a git repository")
+    os.makedirs(path, exist_ok=True)
+    if not os.path.isdir(os.path.join(path, ".git")):
+        await _git(path, "init", "-q", "-b", "main")
+    return path, "main", "main"
 
 
 # ---------- git ----------

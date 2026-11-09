@@ -2,7 +2,8 @@
 """Talk to little-buddy from another machine over its HTTP API. Needs only Python 3, no packages.
 
     buddyctl ask "what's on today"                      a message, through the assistant
-    buddyctl run --repo minecraft-ai "Fix the ..."      a coding task straight to the queue (--worker cheap|standard|strong)
+    buddyctl run --repo minecraft-ai "Fix the ..."      a ticket straight to the queue (--worker cheap|standard|strong)
+    buddyctl run --name perf-dashboard "Build a ..."    a ticket that starts a NEW local project
     buddyctl tickets                                    recent coding tickets
     buddyctl ticket 3 [--watch]                         one ticket, optionally wait for it to finish
     buddyctl continue 3 "Also add a regression test"    follow up
@@ -74,7 +75,9 @@ def main(argv: list[str]) -> None:
     p = argparse.ArgumentParser(prog="buddyctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("ask"); a.add_argument("text", nargs="+")
-    r = sub.add_parser("run"); r.add_argument("--repo", required=True); r.add_argument("--worker", default=None, help="cheap | standard | strong (server default if omitted)")
+    r = sub.add_parser("run"); r.add_argument("--repo", default=None, help="a repository on the allowlist; omit for a new project")
+    r.add_argument("--name", default="", help="name for a new project (with no --repo)")
+    r.add_argument("--worker", default=None, help="cheap | standard | strong (server default if omitted)")
     r.add_argument("--watch", action="store_true"); r.add_argument("text", nargs="+")
     sub.add_parser("tickets")
     t = sub.add_parser("ticket"); t.add_argument("id", type=int); t.add_argument("--watch", action="store_true")
@@ -91,7 +94,7 @@ def main(argv: list[str]) -> None:
         for task in call("GET", "/tickets"):
             print(fmt(task))
     elif args.cmd == "run":
-        task = call("POST", "/tickets", {"objective": " ".join(args.text), "repository": args.repo, "worker": args.worker})
+        task = call("POST", "/tickets", {"objective": " ".join(args.text), "repository": args.repo, "worker": args.worker, "project_name": args.name})
         print(f"queued ticket #{task['id']}")
         if args.watch:
             watch(task["id"])
