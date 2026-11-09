@@ -293,6 +293,25 @@ class OpenCodeTest(DelegateTest):
         self.assertEqual(store.get_task(t2["id"])["status"], "awaiting_review")
         self.assertIn("1 tool call(s) were blocked", self.sent[2])
 
+    def test_nonzero_exit_with_pr_counts_as_done(self):
+        os.environ["FAKE_OPENCODE"] = "exit1"
+        original = runner._pr_for_branch
+
+        async def fake_pr(task):
+            return f"https://github.com/MrBubsters/demo/pull/9" if task["branch"] == f"agent/task-{task['id']}" else None
+        runner._pr_for_branch = fake_pr
+        try:
+            t = self.delegate(worker="cheap")
+            run(drain())
+        finally:
+            runner._pr_for_branch = original
+        t = store.get_task(t["id"])
+        self.assertEqual((t["status"], t["pr_url"]), ("awaiting_review", "https://github.com/MrBubsters/demo/pull/9"))
+        r = store.task_runs(t["id"])[0]
+        self.assertEqual((r["status"], r["exit_code"], r["error"]), ("completed", 1, None))
+        self.assertIn("exited with an error code", self.sent[0])
+        self.assertIn("pull/9", self.sent[0])
+
     def test_budget_stops_the_run(self):
         os.environ["FAKE_OPENCODE"] = "expensive"
         t = self.delegate(worker="cheap")

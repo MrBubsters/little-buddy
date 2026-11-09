@@ -20,7 +20,8 @@ _DENIED = re.compile(r"rejected permission|rule which prevents|permission", re.I
 
 
 def command(*, model: str, cwd: str, resume: str | None) -> list[str]:
-    args = [config.OPENCODE_PATH, "run", "--format", "json", "--model", model, "--dir", cwd]
+    args = [config.OPENCODE_PATH, "run", "--format", "json", "--model", model, "--dir", cwd,
+            "--print-logs", "--log-level", "ERROR"]
     if resume:
         args += ["--session", resume]
     return args
@@ -106,12 +107,12 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
         out.error_kind = "budget"
     elif getattr(proc, "_stopped", False):
         out.error_kind = "stopped"
-    elif _AUTH.search(blob):
+    elif (errors or not out.text) and _AUTH.search(blob):
         out.error_kind = "auth"
-    elif _LIMIT.search(blob):
+    elif (errors or not out.text) and _LIMIT.search(blob):
         out.error_kind = "limit"
     elif errors or proc.returncode or not out.text:
-        out.error_kind = "error"
+        out.error_kind = "error"  # retried provider errors in stderr don't count when an answer came back
     out.ok = out.error_kind is None
     if not out.ok and not out.text:
         out.text = ("\n".join(errors) or out.stderr.strip()[-1500:]

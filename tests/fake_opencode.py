@@ -46,6 +46,11 @@ step_finish(0.01)
 if scenario == "expensive":
     step_finish(9.99)
     time.sleep(30)
+if scenario == "exit1":
+    print("level=ERROR message=\"stream error\" error=\"Rate limit reached for gpt-6-luna on tokens per min\"", file=sys.stderr)
+    emit({"type": "text", "sessionID": sid, "part": {"type": "text", "messageID": msg, "text": "README updated and PR opened."}})
+    step_finish(0.02)
+    sys.exit(1)
 emit({"type": "text", "sessionID": sid, "part": {"type": "text", "messageID": msg,
       "text": "Docs updated and pushed; opened https://github.com/MrBubsters/demo/pull/8."}})
 step_finish(0.02)

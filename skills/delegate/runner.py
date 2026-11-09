@@ -88,11 +88,16 @@ async def _work(task: dict, run: dict) -> claude_code.Outcome:
 
 
 async def _finish(task: dict, run: dict, o: claude_code.Outcome, live: dict) -> None:
+    task = store.get_task(task["id"])  # _work may have set the worktree and branch
+    pr = store.pr_url(o.text) or task["pr_url"] or await _pr_for_branch(task)
+    if not o.ok and o.error_kind == "error" and o.text and pr:
+        # The worker did the job (a PR exists) but exited non-zero, e.g. after provider rate-limit retries.
+        o.ok, o.error_kind = True, None
+        o.text += "\n\n(The worker exited with an error code after opening the PR; check the PR is complete.)"
     run_status = "completed" if o.ok else ("cancelled" if o.error_kind == "stopped" else "failed")
     store.update_run(run["id"], status=run_status, finished_at=store.ts(), session_id=o.session_id,
                      cost_usd=o.cost_usd, turns=o.turns, tools=o.tools, exit_code=o.exit_code,
                      result=o.text, error=o.error_kind)
-    pr = store.pr_url(o.text) or task["pr_url"]
     if o.ok:
         status = "awaiting_review" if pr else "completed"
     else:
@@ -181,6 +186,22 @@ def recover() -> None:
             store.update_task(t["id"], status="failed",
                               summary="The assistant restarted while this run was in progress. "
                                       f"Use `!continue {t['id']} <message>` to resume it.")
+
+
+async def _pr_for_branch(task: dict) -> str | None:
+    """The PR GitHub has for the task's branch, if any (workers sometimes forget to quote the URL)."""
+    if not task.get("branch") or not task.get("worktree") or not os.path.isdir(task["worktree"]):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gh", "pr", "list", "--head", task["branch"], "--state", "all", "--json", "url", "--jq", ".[0].url",
+            cwd=task["worktree"], env=claude_code.environment(),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, _ = await asyncio.wait_for(proc.communicate(), 30)
+    except (OSError, asyncio.TimeoutError):
+        return None
+    url = out.decode(errors="replace").strip()
+    return url if url.startswith("http") else None
 
 
 # ---------- git ----------
