@@ -1,4 +1,4 @@
-"""Tables for delegated work: a *task* is the durable objective, a *run* is one Claude Code attempt at it.
+"""Tables for delegated work: a *ticket* (table agent_tasks) is the durable objective, a *run* is one agent attempt at it.
 
     task: queued -> running -> awaiting_review (a PR exists) | completed | failed | cancelled -> closed
     run:  queued -> running -> completed | failed | cancelled
@@ -153,7 +153,7 @@ def _age(ts_str: str | None) -> str:
 
 
 def describe(t: dict, live: dict | None = None) -> str:
-    """One line: 🔧 task #3 minecraft-ai (sonnet) running 4m · 12 tools — Fix pathfinding..."""
+    """One line: 🔧 ticket #3 minecraft-ai (standard: sonnet) running 4m · 12 tools — Fix pathfinding..."""
     icon = ICONS.get(t["status"], "•")
     bits = [t["status"].replace("_", " ")]
     if t["status"] == "running" and live:
@@ -162,4 +162,4 @@ def describe(t: dict, live: dict | None = None) -> str:
         bits.append(t["pr_url"])
     if t["cost_usd"]:
         bits.append(f"${t['cost_usd']:.2f}")
-    return f"{icon} task #{t['id']} {t['repository']} ({t['tier']}: {t['model']}) {' · '.join(bits)} — {t['objective'][:70]}"
+    return f"{icon} ticket #{t['id']} {t['repository']} ({t['tier']}: {t['model']}) {' · '.join(bits)} — {t['objective'][:70]}"

@@ -92,16 +92,25 @@ class DelegateTest(unittest.TestCase):
 
     def delegate(self, **over) -> dict:
         args = {"objective": OBJECTIVE, "repository": "demo", **over}
-        out = run(REGISTRY.run("delegate_task", args, ToolContext()))
-        self.assertIn("Queued task #", out)
+        out = run(REGISTRY.run("open_ticket", args, ToolContext()))
+        self.assertIn("Queued ticket #", out)
         return store.list_tasks()[0]
 
     def test_schema_lists_repositories(self):
-        schema = REGISTRY.get("delegate_task").schema()["function"]["parameters"]
+        schema = REGISTRY.get("open_ticket").schema()["function"]["parameters"]
         self.assertEqual(schema["properties"]["repository"]["enum"], ["demo"])
         self.assertEqual(schema["properties"]["worker"]["enum"], ["cheap", "standard", "strong"])
-        self.assertEqual(schema["required"], ["objective", "repository"])
-        self.assertIn("delegate_task", [t.name for t in REGISTRY.available(ToolContext())])
+        self.assertEqual(schema["required"], ["objective"])
+        self.assertIn("open_ticket", [t.name for t in REGISTRY.available(ToolContext())])
+
+    def test_missing_repository_asks_instead_of_guessing(self):
+        out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE}, ToolContext()))
+        self.assertTrue(out.startswith("Error: no repository given"))
+        self.assertIn("demo", out)
+        self.assertEqual(store.list_tasks(), [])
+        out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE, "repository": "other"}, ToolContext()))
+        self.assertIn("unknown", out)
+        self.assertEqual(store.list_tasks(), [])
 
     def test_run_completes_in_worktree_and_notifies(self):
         t = self.delegate()
@@ -118,7 +127,7 @@ class DelegateTest(unittest.TestCase):
         self.assertEqual(branch, f"agent/task-{t['id']}")
         self.assertEqual(len(self.sent), 1)
         self.assertIn("pull/7", self.sent[0])
-        self.assertIn("👀 Task #", self.sent[0])
+        self.assertIn("👀 Ticket #", self.sent[0])
         call = calls()[0]
         self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(t["worktree"]))
         self.assertEqual(call["prompt"], OBJECTIVE)
@@ -132,7 +141,7 @@ class DelegateTest(unittest.TestCase):
     def test_continue_resumes_session(self):
         t = self.delegate()
         run(drain())
-        out = run(REGISTRY.run("continue_task", {"task": t["id"], "message": "Also cover the lava case."}, ToolContext()))
+        out = run(REGISTRY.run("continue_ticket", {"ticket": t["id"], "message": "Also cover the lava case."}, ToolContext()))
         self.assertIn("resuming", out)
         run(drain())
         argv = calls()[1]["argv"]
@@ -154,7 +163,7 @@ class DelegateTest(unittest.TestCase):
         t2 = self.delegate()
         run(drain())
         self.assertEqual(store.get_task(t2["id"])["status"], "failed")
-        self.assertIn("❌ Task", self.sent[1])
+        self.assertIn("❌ Ticket", self.sent[1])
 
     def test_monthly_budget_blocks_new_runs(self):
         config.AGENT_MONTHLY_BUDGET_USD = 1.0
@@ -185,15 +194,15 @@ class DelegateTest(unittest.TestCase):
         t2 = store.get_task(t2["id"])
         self.assertEqual(t2["status"], "cancelled")
         self.assertEqual(store.task_runs(t2["id"])[0]["status"], "cancelled")
-        self.assertIn("🛑 Task", self.sent[-1])
+        self.assertIn("🛑 Ticket", self.sent[-1])
 
     def test_commands_and_context(self):
         t = self.delegate()
-        self.assertIn(f"task #{t['id']}", run(skills.run_command("!tasks", ToolContext())))
+        self.assertIn(f"ticket #{t['id']}", run(skills.run_command("!tickets", ToolContext())))
         self.assertIn("in progress", delegate.context(ToolContext(), "hi"))
         run(drain())
         self.assertIsNone(delegate.context(ToolContext(), "hi"))
-        self.assertIn("pull/7", run(skills.run_command(f"!task {t['id']}", ToolContext())))
+        self.assertIn("pull/7", run(skills.run_command(f"!ticket {t['id']}", ToolContext())))
         worktree = store.get_task(t["id"])["worktree"]
         self.assertTrue(os.path.isdir(worktree))
         self.assertIn("Closed", run(skills.run_command(f"!close {t['id']}", ToolContext())))
@@ -215,24 +224,24 @@ class DelegateTest(unittest.TestCase):
                 self.assertEqual((await c.get("/health")).status, 401)
                 self.assertEqual((await c.get("/health", headers={"Authorization": "Bearer nope"})).status, 401)
                 self.assertTrue((await (await c.get("/health", headers=AUTH)).json())["ok"])
-                r = await c.post("/tasks", json={"objective": "short", "repository": "demo"}, headers=AUTH)
+                r = await c.post("/tickets", json={"objective": "short", "repository": "demo"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
-                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "worker": "turbo"}, headers=AUTH)
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "demo", "worker": "turbo"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
-                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "worker": "strong"}, headers=AUTH)
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "demo", "worker": "strong"}, headers=AUTH)
                 self.assertEqual(r.status, 201)
                 task = await r.json()
                 self.assertEqual((task["origin"], task["tier"], task["backend"], task["model"], task["status"]),
                                  ("api", "strong", "claude", "opus", "queued"))
-                r = await c.get(f"/tasks/{task['id']}", headers=AUTH)
+                r = await c.get(f"/tickets/{task['id']}", headers=AUTH)
                 self.assertEqual(len((await r.json())["runs"]), 1)
-                self.assertEqual(len(await (await c.get("/tasks", headers=AUTH)).json()), 1)
-                r = await c.post("/ask", json={"text": "!tasks"}, headers=AUTH)
-                self.assertIn(f"task #{task['id']}", (await r.json())["reply"])
-                r = await c.post(f"/tasks/{task['id']}/cancel", headers=AUTH)
+                self.assertEqual(len(await (await c.get("/tickets", headers=AUTH)).json()), 1)
+                r = await c.post("/ask", json={"text": "!tickets"}, headers=AUTH)
+                self.assertIn(f"ticket #{task['id']}", (await r.json())["reply"])
+                r = await c.post(f"/tickets/{task['id']}/cancel", headers=AUTH)
                 self.assertEqual(r.status, 200)
-                self.assertEqual((await (await c.get(f"/tasks/{task['id']}", headers=AUTH)).json())["status"], "cancelled")
-                self.assertEqual((await c.get("/tasks/999", headers=AUTH)).status, 404)
+                self.assertEqual((await (await c.get(f"/tickets/{task['id']}", headers=AUTH)).json())["status"], "cancelled")
+                self.assertEqual((await c.get("/tickets/999", headers=AUTH)).status, 404)
         run(go())
 
 
@@ -270,7 +279,7 @@ class OpenCodeTest(DelegateTest):
     def test_continue_passes_session(self):
         t = self.delegate(worker="cheap")
         run(drain())
-        run(REGISTRY.run("continue_task", {"task": t["id"], "message": "Also fix the typos in CONTRIBUTING."}, ToolContext()))
+        run(REGISTRY.run("continue_ticket", {"ticket": t["id"], "message": "Also fix the typos in CONTRIBUTING."}, ToolContext()))
         run(drain())
         argv = oc_calls()[1]["argv"]
         self.assertEqual(argv[argv.index("--session") + 1], "ses_ok")

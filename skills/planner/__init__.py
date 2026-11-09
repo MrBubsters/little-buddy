@@ -35,6 +35,8 @@ there's a deadline and its current status in notes. Never keep a task list in me
 - When {owner} says something is finished (in passing, in a check-in, by name or description), call \
 complete_item for EACH open item it covers. They don't need to give an id: pass words from the title. When \
 a task progresses but isn't finished, update_item its notes.
+- Only delete an item {owner} pointed at by its id or title. "Task 3" or "ticket 3" may be a coding ticket \
+(see Coding tickets), not an item: when both exist, ask. Deleted items go to a trash and can be restored.
 - The open items are the only source of truth for what's outstanding. To answer "what's left to do?", call \
 list_items (days_ahead 30) and answer from its result, not from memories or earlier chat.
 - For what {owner} did, finished or accomplished (today, this week, ...), call recap and answer only from its \
@@ -72,9 +74,10 @@ async def add_item(title: str, kind: Kind, category: Category, due_at: When = No
 
 
 @tool
-def list_items(days_ahead: int = 7, category: Category = None) -> str:
-    """List open items: overdue, upcoming within days_ahead, and undated."""
-    items = store.list_items(int(days_ahead or 7), category or None)
+def list_items(days_ahead: int = 7, category: Category = None,
+               include_done: Annotated[bool, "Also show finished items."] = False) -> str:
+    """List items: overdue, upcoming within days_ahead, and undated (open ones unless include_done)."""
+    items = store.list_items(int(days_ahead or 7), category or None, include_done=bool(include_done))
     return "\n".join(store.describe(i) for i in items) or "Nothing found."
 
 
@@ -120,13 +123,39 @@ def complete_item(item: ItemRef) -> str:
 
 @tool(writes=True)
 async def delete_item(item: ItemRef) -> str:
-    """Permanently delete an item (for mistakes or cancelled plans; use complete_item for finished work)."""
+    """Delete an item (for mistakes or cancelled plans; use complete_item for finished work). Restorable with restore_item."""
     item = _item(item)
     id = item["id"]
     if _synced(item):
         await asyncio.to_thread(gcal.delete_event, item["gcal_id"])
     store.delete_item(id)
-    return f"Deleted #{id} {item['title']}" + (" (also from Google Calendar)." if _synced(item) else ".")
+    return f"Deleted #{id} {item['title']}" + (" (also from Google Calendar)." if _synced(item) else ".") + \
+        f" Undo: restore_item {id}."
+
+
+@tool(writes=True)
+def restore_item(id: Annotated[int, "The deleted item's id."]) -> str:
+    """Bring back a deleted item."""
+    item = store.get_item(int(id))
+    if not item or not item.get("deleted_at"):
+        return f"Error: #{id} isn't in the trash. Deleted items: " + \
+            ("; ".join(f"#{i['id']} {i['title']}" for i in store.list_deleted()) or "none")
+    return "Restored: " + store.describe(store.restore_item(int(id)))
+
+
+@command("!trash", "recently deleted items (`!restore <id>` brings one back)")
+def _trash_cmd(args: str, ctx) -> str:
+    items = store.list_deleted()
+    return "\n".join(f"🗑️ #{i['id']} [{i['kind']}/{i['category']}] {i['title']} — deleted {db.pretty(i['deleted_at'])}"
+                     for i in items) or "The trash is empty."
+
+
+@command("!restore", "restore a deleted item: `!restore <id>`")
+def _restore_cmd(args: str, ctx) -> str:
+    try:
+        return restore_item(int(args.strip().lstrip("#")))
+    except ValueError:
+        return "Usage: `!restore <id>`"
 
 
 @tool

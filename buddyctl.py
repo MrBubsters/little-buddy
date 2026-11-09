@@ -3,8 +3,8 @@
 
     buddyctl ask "what's on today"                      a message, through the assistant
     buddyctl run --repo minecraft-ai "Fix the ..."      a coding task straight to the queue (--worker cheap|standard|strong)
-    buddyctl tasks                                      recent tasks
-    buddyctl task 3 [--watch]                           one task, optionally wait for it to finish
+    buddyctl tickets                                    recent coding tickets
+    buddyctl ticket 3 [--watch]                         one ticket, optionally wait for it to finish
     buddyctl continue 3 "Also add a regression test"    follow up
     buddyctl cancel 3
     buddyctl health
@@ -76,8 +76,8 @@ def main(argv: list[str]) -> None:
     a = sub.add_parser("ask"); a.add_argument("text", nargs="+")
     r = sub.add_parser("run"); r.add_argument("--repo", required=True); r.add_argument("--worker", default=None, help="cheap | standard | strong (server default if omitted)")
     r.add_argument("--watch", action="store_true"); r.add_argument("text", nargs="+")
-    sub.add_parser("tasks")
-    t = sub.add_parser("task"); t.add_argument("id", type=int); t.add_argument("--watch", action="store_true")
+    sub.add_parser("tickets")
+    t = sub.add_parser("ticket"); t.add_argument("id", type=int); t.add_argument("--watch", action="store_true")
     c = sub.add_parser("continue"); c.add_argument("id", type=int); c.add_argument("text", nargs="+")
     x = sub.add_parser("cancel"); x.add_argument("id", type=int)
     sub.add_parser("health")
@@ -87,26 +87,26 @@ def main(argv: list[str]) -> None:
         print(json.dumps(call("GET", "/health"), indent=2))
     elif args.cmd == "ask":
         print(call("POST", "/ask", {"text": " ".join(args.text)})["reply"])
-    elif args.cmd == "tasks":
-        for task in call("GET", "/tasks"):
+    elif args.cmd == "tickets":
+        for task in call("GET", "/tickets"):
             print(fmt(task))
     elif args.cmd == "run":
-        task = call("POST", "/tasks", {"objective": " ".join(args.text), "repository": args.repo, "worker": args.worker})
-        print(f"queued task #{task['id']}")
+        task = call("POST", "/tickets", {"objective": " ".join(args.text), "repository": args.repo, "worker": args.worker})
+        print(f"queued ticket #{task['id']}")
         if args.watch:
             watch(task["id"])
-    elif args.cmd == "task":
-        watch(args.id) if args.watch else show_task(call("GET", f"/tasks/{args.id}"))
+    elif args.cmd == "ticket":
+        watch(args.id) if args.watch else show_task(call("GET", f"/tickets/{args.id}"))
     elif args.cmd == "continue":
-        print(call("POST", f"/tasks/{args.id}/continue", {"message": " ".join(args.text)})["message"])
+        print(call("POST", f"/tickets/{args.id}/continue", {"message": " ".join(args.text)})["message"])
     elif args.cmd == "cancel":
-        print(call("POST", f"/tasks/{args.id}/cancel", {})["message"])
+        print(call("POST", f"/tickets/{args.id}/cancel", {})["message"])
 
 
 def watch(task_id: int) -> None:
     last = None
     while True:
-        task = call("GET", f"/tasks/{task_id}")
+        task = call("GET", f"/tickets/{task_id}")
         state = (task["status"], (task.get("live") or {}).get("tools"))
         if state != last:
             print(f"\r{time.strftime('%H:%M:%S')} {task['status']}"

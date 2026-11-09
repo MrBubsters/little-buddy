@@ -1,4 +1,4 @@
-"""Queue worker for delegated tasks: starts queued runs when there's room, each in its own git worktree,
+"""Queue worker for coding tickets: starts queued runs when there's room, each in its own git worktree,
 records the outcome and tells the owner. Driven by the skill's on_tick (every ~30 s)."""
 import asyncio
 import os
@@ -38,12 +38,12 @@ async def tick() -> None:
                    f"may cost up to ${config.AGENT_MAX_BUDGET_USD:.2f}). Raise AGENT_MONTHLY_BUDGET_USD or wait.")
             store.update_run(run["id"], status="failed", finished_at=store.ts(), error=msg)
             store.update_task(task["id"], status="failed", summary=msg)
-            await app.notify(f"❌ Task #{task['id']} ({task['repository']}) not started. {msg}")
+            await app.notify(f"❌ Ticket #{task['id']} ({task['repository']}) not started. {msg}")
             continue
         store.update_run(run["id"], status="running", started_at=store.ts())
         store.update_task(task["id"], status="running")
         LIVE[task["id"]] = {"started_at": store.ts(), "tools": 0, "last": ""}
-        print(f"[delegate] task #{task['id']} run #{run['id']} starting: {task['repository']} "
+        print(f"[delegate] ticket #{task['id']} run #{run['id']} starting: {task['repository']} "
               f"({task['tier']}: {task['backend']} {task['model']})")
         ACTIVE[task["id"]] = asyncio.create_task(_execute(task, run))
 
@@ -104,15 +104,16 @@ async def _finish(task: dict, run: dict, o: claude_code.Outcome, live: dict) -> 
         status = "cancelled" if o.error_kind == "stopped" else "failed"
     store.update_task(task["id"], status=status, session_id=o.session_id or task["session_id"], pr_url=pr,
                       summary=o.text[:4000], cost_usd=(task["cost_usd"] or 0) + o.cost_usd)
-    print(f"[delegate] task #{task['id']} run #{run['id']} {run_status}: {o.turns} turns, {o.tools} tools, "
+    print(f"[delegate] ticket #{task['id']} run #{run['id']} {run_status}: {o.turns} turns, {o.tools} tools, "
           f"${o.cost_usd:.2f}, exit {o.exit_code}, error={o.error_kind}, pr={pr}")
     await app.notify(_report(store.get_task(task["id"]), o, live))
 
 
 def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
-    word = {"awaiting_review": "done, PR ready for review", "completed": "done (no PR)",
+    word = {"awaiting_review": "done, PR ready for review",
+            "completed": f"finished without a PR. If it's asking something, answer with `!continue {t['id']} <answer>`",
             "failed": "failed", "cancelled": "stopped"}[t["status"]]
-    head = f"{store.ICONS[t['status']]} Task #{t['id']} ({t['repository']}, {t['tier']}: {t['model']}) {word}"
+    head = f"{store.ICONS[t['status']]} Ticket #{t['id']} ({t['repository']}, {t['tier']}: {t['model']}) {word}"
     body = o.text if len(o.text) <= 1500 else o.text[:1500] + "…"
     lines = [head, body]
     if t["pr_url"] and t["pr_url"] not in body:
@@ -126,7 +127,7 @@ def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
     if o.denials:
         meta += f" · {o.denials} tool call(s) denied by permission mode {config.AGENT_PERMISSION_MODE}"
     lines.append(meta)
-    lines.append(f"-# `!task {t['id']}` full result · `!continue {t['id']} <message>` follow up · `!close {t['id']}` when merged")
+    lines.append(f"-# `!ticket {t['id']}` full result · `!continue {t['id']} <message>` follow up · `!close {t['id']}` when merged")
     return "\n".join(x for x in lines if x)
 
 
@@ -134,49 +135,49 @@ def _report(t: dict, o: claude_code.Outcome, live: dict) -> str:
 def continue_task(task_id: int, message: str) -> str:
     t = store.get_task(task_id)
     if not t:
-        return f"Error: no task #{task_id}."
+        return f"Error: no ticket #{task_id}."
     if t["status"] in store.TASK_ACTIVE:
-        return f"Error: task #{task_id} is still {t['status']}; wait for it to finish (or `!cancel {task_id}`)."
+        return f"Error: ticket #{task_id} is still {t['status']}; wait for it to finish (or `!cancel {task_id}`)."
     if t["status"] == "closed":
-        return f"Error: task #{task_id} is closed; start a new task instead."
+        return f"Error: ticket #{task_id} is closed; open a new ticket instead."
     if len(message.strip()) < 5:
         return "Error: say what the agent should do next."
     store.add_run(task_id, message)
     store.update_task(task_id, status="queued")
     how = "resuming its earlier session" if t["session_id"] else "starting fresh in its worktree"
-    return f"Queued follow-up for task #{task_id} ({t['repository']}), {how}."
+    return f"Queued follow-up for ticket #{task_id} ({t['repository']}), {how}."
 
 
 async def cancel(task_id: int) -> str:
     t = store.get_task(task_id)
     if not t:
-        return f"Error: no task #{task_id}."
+        return f"Error: no ticket #{task_id}."
     if t["status"] not in store.TASK_ACTIVE:
-        return f"Error: task #{task_id} is {t['status']}, nothing to cancel."
+        return f"Error: ticket #{task_id} is {t['status']}, nothing to cancel."
     if task_id in ACTIVE:
         ACTIVE[task_id].cancel()  # _execute records it as stopped and notifies
-        return f"Stopping task #{task_id}…"
+        return f"Stopping ticket #{task_id}…"
     for r in store.task_runs(task_id):
         if r["status"] == "queued":
             store.update_run(r["id"], status="cancelled", finished_at=store.ts())
     store.update_task(task_id, status="cancelled")
-    return f"Cancelled task #{task_id} before it started."
+    return f"Cancelled ticket #{task_id} before it started."
 
 
 async def close(task_id: int) -> str:
     """Remove the worktree (the branch and PR stay on GitHub) and mark the task closed."""
     t = store.get_task(task_id)
     if not t:
-        return f"Error: no task #{task_id}."
+        return f"Error: no ticket #{task_id}."
     if t["status"] in store.TASK_ACTIVE:
-        return f"Error: task #{task_id} is still {t['status']}."
+        return f"Error: ticket #{task_id} is still {t['status']}."
     if t["worktree"] and os.path.isdir(t["worktree"]):
         try:
             await _git(config.AGENT_REPOS[t["repository"]], "worktree", "remove", "--force", t["worktree"])
         except (RuntimeError, KeyError) as e:
             return f"Error: couldn't remove the worktree: {e}"
     store.update_task(task_id, status="closed")
-    return f"Closed task #{task_id}; worktree removed."
+    return f"Closed ticket #{task_id}; worktree removed."
 
 
 def recover() -> None:

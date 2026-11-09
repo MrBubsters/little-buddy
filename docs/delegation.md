@@ -3,7 +3,7 @@
 little-buddy can hand coding tasks to coding agents running headless on the same machine:
 [Claude Code](https://code.claude.com) on your subscription, and [OpenCode](https://opencode.ai) for
 any other provider's model (OpenAI, Google, OpenRouter, a local Ollama model, ...) billed per request. You say "fix the pathfinding in the Minecraft bot and open a PR" on Discord (or from
-another computer with `buddyctl.py`); the local model writes a brief and queues a **task**; a Claude
+another computer with `buddyctl.py`); the local model writes a brief and queues a **ticket**; a Claude
 Code session works on it in its own git worktree; when it finishes you get the summary and the pull
 request link. The local model never runs code or chooses where to work: the repositories, budgets
 and permissions are fixed in `.env`.
@@ -66,19 +66,23 @@ cd ~/minecraft-ai && echo "say hi" | ~/.local/bin/claude -p --output-format json
 
 | You say / type | What happens |
 |---|---|
-| "Investigate why the bot walks into walls near water, fix it and open a PR" | The model calls `delegate_task`; you get "Queued task #3 … `!cancel 3` stops it". |
-| `!tasks` | Recent tasks with status, cost and PR links. |
-| `!task 3` | One task in detail: its runs and the agent's full summary. |
-| "how's the pathfinding fix going?" | The model answers from `task_status`. |
+| "Investigate why the minecraft bot walks into walls near water, fix it and open a PR" | The model calls `open_ticket`; you get "Queued ticket #3 … `!cancel 3` stops it". |
+| "Add a dashboard script" (no repository named) | The tool refuses to guess; the model asks which repository. Create and allowlist a repo first if none fits. |
+| `!tickets` | Recent tickets with status, cost and PR links. |
+| `!ticket 3` | One ticket in detail: its runs and the agent's full summary. |
+| "how's the pathfinding fix going?" | The model answers from `ticket_status`. |
 | `!continue 3 also add a test for the lava case` | A follow-up run that resumes the same Claude session. |
-| `!cancel 3` | Stops a queued or running task. |
+| `!cancel 3` | Stops a queued or running ticket. |
 | `!close 3` | Removes the worktree after the PR is merged (the branch stays on GitHub). |
 | "have GPT write the docs for..." / "use opus for this one" | `worker=cheap` / `worker=strong`. Otherwise the assistant picks: cheap for docs, summaries and small changes, standard for ordinary fixes and features. |
 
 Statuses: `queued → running → awaiting_review` (a PR exists) or `completed` (no PR), `failed`,
 `cancelled`, `closed`.
 
-Each task gets its own worktree under `AGENT_WORKTREES` on branch `agent/task-<n>`, based on the
+Tickets are deliberately not called tasks: planner to-dos are "tasks"/"items" (#30), coding tickets are
+"tickets" (#3), and scheduled jobs are "jobs". The model is told to ask when a number is ambiguous.
+
+Each ticket gets its own worktree under `AGENT_WORKTREES` on branch `agent/task-<n>`, based on the
 repository's default branch (fetched first). The agent is told to commit, push and open a PR, and is
 blocked from `gh pr merge`, force pushes and `git reset --hard`: for Claude Code via `--disallowedTools`,
 for OpenCode via the permission file above. The per-run cap is passed to Claude Code as
@@ -98,12 +102,12 @@ export BUDDY_URL=http://10.0.0.48:8765 BUDDY_TOKEN=<the token>     # or ~/.confi
 python3 buddyctl.py health
 python3 buddyctl.py ask "what's on today"
 python3 buddyctl.py run --repo minecraft-ai --watch "Fix the pathfinding near water and add a regression test"
-python3 buddyctl.py tasks
+python3 buddyctl.py tickets
 python3 buddyctl.py continue 3 "Also handle lava"
 ```
 
 `ask` goes through the local model like a Discord message (same conversation history). `run` skips the
-model and queues the task directly. Results are still announced on Discord. The API is plain HTTP with a
+model and queues the ticket directly. Results are still announced on Discord. The API is plain HTTP with a
 bearer token: keep it on your LAN or behind an SSH tunnel.
 
 ## Settings
@@ -126,9 +130,9 @@ bearer token: keep it on your LAN or behind an SSH tunnel.
 - **"❌ … credentials are missing or expired"**: for a Claude tier, run `claude` as the service user and `/login`
   (or refresh `CLAUDE_CODE_OAUTH_TOKEN`); for an OpenCode tier, check the provider key in `.env`.
 - **OpenCode run ends with "tool call(s) were blocked"**: the permission file denied something it needed.
-  Check `!task <n>` for which command, and adjust `~/.config/opencode/opencode.json`.
+  Check `!ticket <n>` for which command, and adjust `~/.config/opencode/opencode.json`.
 - **"usage limit was hit"**: the plan's window is exhausted; the task is marked failed. `!continue` it later.
-- **Run finished with denied tool calls**: the permission mode blocked something. Check `!task <n>` and
+- **Run finished with denied tool calls**: the permission mode blocked something. Check `!ticket <n>` and
   consider `AGENT_PERMISSION_MODE=acceptEdits` or `bypassPermissions` (the worktree limits the blast radius).
-- **Nothing starts**: `!tasks` shows `queued` forever → check the bot log for `[jobs]`/`[skills] delegate` errors,
+- **Nothing starts**: `!tickets` shows `queued` forever → check the bot log for `[jobs]`/`[skills] delegate` errors,
   and that `AGENT_REPOS` paths exist and are git checkouts.
