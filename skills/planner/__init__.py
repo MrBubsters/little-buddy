@@ -35,8 +35,8 @@ there's a deadline and its current status in notes. Never keep a task list in me
 - When {owner} says something is finished (in passing, in a check-in, by name or description), call \
 complete_item for EACH open item it covers. They don't need to give an id: pass words from the title. When \
 a task progresses but isn't finished, update_item its notes.
-- Only delete an item {owner} pointed at by its id or title. "Task 3" or "ticket 3" may be a coding ticket \
-(see Coding tickets), not an item: when both exist, ask. Deleted items go to a trash and can be restored.
+- Only delete items {owner} pointed at by id or title; "ticket 3" is a coding ticket, not an item. Deleted items \
+can be brought back with `!restore <id>`.
 - The open items are the only source of truth for what's outstanding. To answer "what's left to do?", call \
 list_items (days_ahead 30) and answer from its result, not from memories or earlier chat.
 - For what {owner} did, finished or accomplished (today, this week, ...), call recap and answer only from its \
@@ -123,19 +123,18 @@ def complete_item(item: ItemRef) -> str:
 
 @tool(writes=True)
 async def delete_item(item: ItemRef) -> str:
-    """Delete an item (for mistakes or cancelled plans; use complete_item for finished work). Restorable with restore_item."""
+    """Delete an item (for mistakes or cancelled plans; use complete_item for finished work)."""
     item = _item(item)
     id = item["id"]
     if _synced(item):
         await asyncio.to_thread(gcal.delete_event, item["gcal_id"])
     store.delete_item(id)
     return f"Deleted #{id} {item['title']}" + (" (also from Google Calendar)." if _synced(item) else ".") + \
-        f" Undo: restore_item {id}."
+        f" (`!restore {id}` undoes this.)"
 
 
-@tool(writes=True)
-def restore_item(id: Annotated[int, "The deleted item's id."]) -> str:
-    """Bring back a deleted item."""
+def restore_item(id: int) -> str:
+    """Bring back a deleted item (the `!restore` command)."""
     item = store.get_item(int(id))
     if not item or not item.get("deleted_at"):
         return f"Error: #{id} isn't in the trash. Deleted items: " + \

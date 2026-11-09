@@ -27,7 +27,7 @@ class TrashTest(unittest.TestCase):
         item = store.add_item("Buy stamps", "task", category="personal")
         out = run(REGISTRY.run("delete_item", {"item": str(item["id"])}, ToolContext()))
         self.assertIn("Deleted", out)
-        self.assertIn("restore_item", out)
+        self.assertIn("!restore", out)
         self.assertEqual(store.find_open(str(item["id"])), [])
         self.assertNotIn(item["id"], [i["id"] for i in store.list_items(60)])
         self.assertIn(item["id"], [i["id"] for i in store.list_deleted()])
@@ -35,7 +35,7 @@ class TrashTest(unittest.TestCase):
         out = run(skills.run_command(f"!restore {item['id']}", ToolContext()))
         self.assertIn("Restored", out)
         self.assertEqual(store.find_open(str(item["id"]))[0]["id"], item["id"])
-        self.assertIn("isn't in the trash", run(REGISTRY.run("restore_item", {"id": item["id"]}, ToolContext())))
+        self.assertIn("isn't in the trash", run(skills.run_command(f"!restore {item['id']}", ToolContext())))
 
     def test_list_items_can_include_done(self):
         item = store.add_item("Old chore", "task", category="personal")

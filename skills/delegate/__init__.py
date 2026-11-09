@@ -21,27 +21,18 @@ REPOS = tuple(config.AGENT_REPOS) or ("none",)
 Repository = Literal[REPOS]  # type: ignore[valid-type]
 TIERS = tuple(config.AGENT_TIERS)
 Worker = Literal[TIERS]  # type: ignore[valid-type]
-_TIER_LIST = "; ".join(f"{t} = {m} via {'Claude Code' if b == 'claude' else 'OpenCode'}" for t, (b, m) in config.AGENT_TIERS.items())
+_TIER_LIST = ", ".join(f"{t}={m}" for t, (b, m) in config.AGENT_TIERS.items())
 
-GUIDE = f"""Coding tickets (work handed to a coding agent that opens a pull request):
-- When {{owner}} wants code written, fixed, investigated or reviewed, call open_ticket. The agent works in the \
-background and you're told when it finishes. Never attempt the coding yourself or guess at the outcome.
-- repository: pass it ONLY when {{owner}} named one of: {', '.join(REPOS)} (or the request is unmistakably about \
-that project). Otherwise leave it out and the tool tells you what to ask. Never pick a repository just because it's \
-the only one that roughly fits.
-- The objective is the ONLY thing the agent sees. Write a complete brief: what's wanted or wrong, where to look if \
-known, every constraint they gave, and what done looks like. Don't invent paths, branch names or details.
-- worker: "cheap" for documentation, summaries, small well-defined changes and PR chores; "standard" for ordinary \
-bug fixes and features; "strong" only when {{owner}} asks for it. If they name a model or provider (GPT, Luna, opus, \
-Claude), pick the tier that uses it. Tiers: {_TIER_LIST}.
-- A ticket is NOT a planner item. "ticket 3" means a coding ticket (ticket_status, continue_ticket, `!cancel 3`); \
-"task 30", "#30" or anything from the agenda means a planner item (complete_item, delete_item). Never delete or \
-complete planner items because of a ticket, and never cancel a ticket because of a planner item.
-- Follow-ups about a ticket's result ("also add tests", "the PR fails CI", answers to the agent's questions) go to \
-continue_ticket with its number, not to a new ticket. If the work must move to a different repository, open a new \
-ticket there and tell {{owner}} the old one can be closed.
-- After opening a ticket, tell them its number and that `!cancel <number>` stops it. Don't promise how long it \
-takes. ticket_status answers "how's the dashboard going"."""
+GUIDE = f"""Coding tickets (code work handed to an agent that opens a PR; NOT planner items):
+- To get code written, fixed, investigated or reviewed, call open_ticket with a complete brief (what, where if known, \
+constraints, what done looks like). Never code yourself or guess the outcome.
+- repository: only if {{owner}} named one of {', '.join(REPOS)}; otherwise omit it and ask what the tool says. Never guess.
+- worker: cheap = docs, summaries, small well-defined changes; standard = normal fixes and features; strong = only \
+when asked. A named model or provider means its tier ({_TIER_LIST}).
+- "ticket 3" = a ticket (ticket_status, continue_ticket, `!cancel 3`); "task 30" or an agenda item = a planner item. \
+Never change one because of the other.
+- Follow-ups and answers to an agent's questions go to continue_ticket, not a new ticket.
+- Tell {{owner}} the ticket number and that `!cancel <n>` stops it; don't promise how long it takes."""
 
 
 def _enabled() -> bool:
@@ -50,10 +41,9 @@ def _enabled() -> bool:
 
 # ---------- tools ----------
 @tool(writes=True, owner_only=True, enabled=_enabled)
-def open_ticket(objective: Annotated[str, "Complete brief for the agent: the problem or goal, where to look, constraints, what done looks like."],
-                repository: Annotated[Repository, "Only when the user named it."] = None,
-                worker: Annotated[Worker, "Which tier of agent should do it."] = None, ctx: ToolContext = None) -> str:
-    """Hand a coding task to a coding agent that works in the background and opens a pull request."""
+def open_ticket(objective: Annotated[str, "Complete brief: goal or problem, where to look, constraints, what done looks like."],
+                repository: Repository = None, worker: Worker = None, ctx: ToolContext = None) -> str:
+    """Hand code work to a background agent that opens a pull request."""
     if repository not in config.AGENT_REPOS:
         return (f"Error: no repository given{'' if not repository else f' (unknown: {repository!r})'}. Ask {config.owner()} "
                 f"which one it's for: {', '.join(config.AGENT_REPOS)}. If none of these fits, say so; a new repository "
@@ -68,8 +58,8 @@ def open_ticket(objective: Annotated[str, "Complete brief for the agent: the pro
 
 
 @tool(owner_only=True, enabled=_enabled)
-def ticket_status(ticket: Annotated[int, "Ticket number, or 0 for an overview of recent tickets."] = 0) -> str:
-    """Status of coding tickets: what's running, finished, or waiting for review."""
+def ticket_status(ticket: Annotated[int, "Ticket number; 0 = recent tickets."] = 0) -> str:
+    """Status of coding tickets."""
     if ticket:
         t = store.get_task(ticket)
         return detail(t) if t else f"Error: no ticket #{ticket}."
@@ -78,8 +68,8 @@ def ticket_status(ticket: Annotated[int, "Ticket number, or 0 for an overview of
 
 
 @tool(writes=True, owner_only=True, enabled=_enabled)
-def continue_ticket(ticket: int, message: Annotated[str, "What to do next (or answers to its questions), as a complete instruction for the agent."]) -> str:
-    """Send a follow-up to a finished ticket's agent; it resumes with its earlier context."""
+def continue_ticket(ticket: int, message: Annotated[str, "Next instruction or answers, complete in itself."]) -> str:
+    """Follow up on a finished ticket; its agent resumes with its context."""
     return runner.continue_task(ticket, message)
 
 
