@@ -41,6 +41,7 @@ async def tick() -> None:
         store.update_run(run["id"], status="running", started_at=store.ts())
         store.update_task(task["id"], status="running")
         LIVE[task["id"]] = {"started_at": store.ts(), "tools": 0, "last": ""}
+        print(f"[delegate] task #{task['id']} run #{run['id']} starting: {task['repository']} ({task['model']})")
         ACTIVE[task["id"]] = asyncio.create_task(_execute(task, run))
 
 
@@ -92,6 +93,8 @@ async def _finish(task: dict, run: dict, o: claude_code.Outcome, live: dict) -> 
         status = "cancelled" if o.error_kind == "stopped" else "failed"
     store.update_task(task["id"], status=status, session_id=o.session_id or task["session_id"], pr_url=pr,
                       summary=o.text[:4000], cost_usd=(task["cost_usd"] or 0) + o.cost_usd)
+    print(f"[delegate] task #{task['id']} run #{run['id']} {run_status}: {o.turns} turns, {o.tools} tools, "
+          f"${o.cost_usd:.2f}, exit {o.exit_code}, error={o.error_kind}, pr={pr}")
     await app.notify(_report(store.get_task(task["id"]), o, live))
 
 
