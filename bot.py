@@ -8,7 +8,7 @@ import sys
 import discord
 
 import config
-from core import agent, scheduler, skills
+from core import agent, api, scheduler, skills
 from core.app import app
 from core.skills import Forward
 from core.tools import ToolContext
@@ -55,6 +55,12 @@ async def on_ready():
     except Exception as e:
         print(f"[llm] warm-up failed: {e!r}")
     await skills.run_hooks("on_start")
+    try:
+        url = await api.start()
+        if url:
+            print(f"[api] listening on {url}")
+    except Exception as e:
+        print(f"[api] failed to start: {e!r}")
     asyncio.create_task(scheduler.run_forever())
 
 
