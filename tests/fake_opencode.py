@@ -31,6 +31,10 @@ def step_finish(cost):
 if scenario == "auth":
     emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {"message": "401 Incorrect API key provided"}}})
     sys.exit(1)
+if scenario == "credits":
+    emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {
+          "message": "You have no credits remaining. Add credits to continue using the API."}}})
+    sys.exit(1)
 emit({"type": "step_start", "sessionID": sid, "part": {"type": "step-start", "messageID": msg}})
 emit({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "bash", "messageID": msg,
       "state": {"status": "completed", "input": {"command": "npm test"}}}})

@@ -15,7 +15,7 @@ import config
 from skills.delegate.claude_code import PROCESSES, Outcome, environment, stop
 
 _AUTH = re.compile(r"\b401\b|unauthorized|invalid api key|incorrect api key|authentication|no api key|missing api key", re.I)
-_LIMIT = re.compile(r"\b429\b|rate limit|quota|too many requests|overloaded", re.I)
+_LIMIT = re.compile(r"\b429\b|rate limit|quota|too many requests|overloaded|no credits|insufficient[_ ]quota|billing", re.I)
 _DENIED = re.compile(r"rejected permission|rule which prevents|permission", re.I)
 
 

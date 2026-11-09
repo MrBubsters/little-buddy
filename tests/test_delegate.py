@@ -282,11 +282,16 @@ class OpenCodeTest(DelegateTest):
         run(drain())
         self.assertEqual(store.task_runs(t["id"])[0]["error"], "auth")
         self.assertIn("API key", self.sent[0])
+        os.environ["FAKE_OPENCODE"] = "credits"
+        tc = self.delegate(worker="cheap")
+        run(drain())
+        self.assertEqual(store.task_runs(tc["id"])[0]["error"], "limit")
+        self.assertIn("add credits", self.sent[1])
         os.environ["FAKE_OPENCODE"] = "denied"
         t2 = self.delegate(worker="cheap")
         run(drain())
         self.assertEqual(store.get_task(t2["id"])["status"], "awaiting_review")
-        self.assertIn("1 tool call(s) were blocked", self.sent[1])
+        self.assertIn("1 tool call(s) were blocked", self.sent[2])
 
     def test_budget_stops_the_run(self):
         os.environ["FAKE_OPENCODE"] = "expensive"

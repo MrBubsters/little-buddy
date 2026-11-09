@@ -44,7 +44,8 @@ class Outcome:
         return {
             "auth": "The worker's credentials are missing or expired: log in to Claude Code on this machine, or check "
                     "the provider API key in .env.",
-            "limit": "The provider's usage or rate limit was hit. Wait for it to reset, or use another tier.",
+            "limit": "The provider's usage, rate or credit limit was hit. Wait for it to reset, add credits, or use "
+                     "another tier (`!continue <n> <message>` retries once that's sorted).",
             "budget": f"The run hit its ${config.AGENT_MAX_BUDGET_USD:.2f} budget before finishing.",
             "timeout": f"The run exceeded {config.AGENT_TIMEOUT_MINUTES} minutes and was stopped.",
             "stopped": "The run was stopped.",
