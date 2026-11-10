@@ -61,6 +61,7 @@ You'll need about 30 minutes for the first setup.
 | 4. Start the bot and DM it `!help` | in the install guides |
 
 Already running it and switching computers? See [docs/moving-machines.md](docs/moving-machines.md).
+For supported model APIs and setup steps for Grok or Gemini, see [Model providers](docs/model-providers.md).
 
 ### Requirements
 - Python **3.10+**
