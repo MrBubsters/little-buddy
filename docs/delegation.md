@@ -85,6 +85,11 @@ for OpenCode via the permission file above. The per-run cap is passed to Claude 
 `--max-budget-usd`; for OpenCode the bot adds up the cost it reports per step and stops the run when it
 passes the cap. The monthly cap is checked against recorded run costs before each start.
 
+If an agent finds a clear bug unrelated to its assigned task, it leaves that bug's code unchanged and
+creates an issue in the GitHub repository where the bug lives. The issue should include concise evidence
+or reproduction steps and impact; the agent checks for duplicates first and reports any repository or
+permission blocker instead of claiming an issue was created. The final summary includes links to created issues.
+
 If the bot restarts mid-run, the run is recorded as `interrupted by restart`; `!continue <n> …`
 resumes the session.
 
