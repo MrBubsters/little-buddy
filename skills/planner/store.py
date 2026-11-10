@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS items(
     created_at TEXT NOT NULL
 );
 """)
+db.add_column("items", "deleted_at", "TEXT")  # soft delete: deleted items can be restored
 db.add_column("items", "gcal_id", "TEXT")
 db.add_column("items", "all_day", "INTEGER NOT NULL DEFAULT 0")
 db.add_column("items", "done_at", "TEXT")
@@ -136,12 +137,12 @@ def complete_item(item_id: int) -> dict | None:
 
 def done_since(since: datetime) -> list[dict]:
     """Items completed at or after `since`, oldest first."""
-    rows = conn.execute("SELECT * FROM items WHERE done=1 AND done_at >= ? ORDER BY done_at", (fmt(since),))
+    rows = conn.execute("SELECT * FROM items WHERE done=1 AND deleted_at IS NULL AND done_at >= ? ORDER BY done_at", (fmt(since),))
     return [dict(r) for r in rows]
 
 
 def events_between(start: datetime, end: datetime) -> list[dict]:
-    rows = conn.execute("SELECT * FROM items WHERE kind='event' AND due_at >= ? AND due_at < ? ORDER BY due_at",
+    rows = conn.execute("SELECT * FROM items WHERE kind='event' AND deleted_at IS NULL AND due_at >= ? AND due_at < ? ORDER BY due_at",
                         (fmt(start), fmt(end)))
     return [dict(r) for r in rows]
 
@@ -161,12 +162,12 @@ def find_open(ref) -> list[dict]:
     m = re.fullmatch(r"#?(\d+)", ref)
     if m:
         item = get_item(int(m[1]))
-        return [item] if item else []
+        return [item] if item and not item.get("deleted_at") else []
     want = _words(ref)
     if not want:
         return []
     scored = []
-    for r in conn.execute("SELECT * FROM items WHERE done=0"):
+    for r in conn.execute("SELECT * FROM items WHERE done=0 AND deleted_at IS NULL"):
         title, notes = _words(r["title"]), _words(r["notes"] or "")
         score = len(want & title) + 0.5 * len(want & (notes - title))
         if ref.lower() in r["title"].lower():
@@ -189,9 +190,21 @@ def relative(ts: str | None) -> str:
 
 
 def delete_item(item_id: int) -> bool:
-    cur = conn.execute("DELETE FROM items WHERE id=?", (item_id,))
+    """Move an item to the trash (restore_item brings it back)."""
+    cur = conn.execute("UPDATE items SET deleted_at=? WHERE id=? AND deleted_at IS NULL", (fmt(now()), item_id))
     conn.commit()
     return cur.rowcount > 0
+
+
+def restore_item(item_id: int) -> dict | None:
+    conn.execute("UPDATE items SET deleted_at=NULL WHERE id=?", (item_id,))
+    conn.commit()
+    return get_item(item_id)
+
+
+def list_deleted(limit: int = 10) -> list[dict]:
+    rows = conn.execute("SELECT * FROM items WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT ?", (limit,))
+    return [dict(r) for r in rows]
 
 
 def list_items(days_ahead: int = 7, category: str | None = None, include_done=False,
@@ -199,7 +212,7 @@ def list_items(days_ahead: int = 7, category: str | None = None, include_done=Fa
     """Open items that are overdue, due within `days_ahead`, or have no date."""
     end = fmt(now() + timedelta(days=days_ahead))
     # Past events are simply over; only tasks/deadlines/reminders can be overdue.
-    sql = "SELECT * FROM items WHERE (due_at IS NULL OR due_at <= ?) AND NOT (kind='event' AND due_at < ?)"
+    sql = "SELECT * FROM items WHERE deleted_at IS NULL AND (due_at IS NULL OR due_at <= ?) AND NOT (kind='event' AND due_at < ?)"
     args: list = [end, fmt(now())]
     if not include_done:
         sql += " AND done=0"
@@ -215,7 +228,7 @@ def list_items(days_ahead: int = 7, category: str | None = None, include_done=Fa
 
 def due_reminders() -> list[dict]:
     rows = conn.execute(
-        "SELECT * FROM items WHERE done=0 AND reminded=0 AND remind_at IS NOT NULL AND remind_at <= ?",
+        "SELECT * FROM items WHERE done=0 AND deleted_at IS NULL AND reminded=0 AND remind_at IS NOT NULL AND remind_at <= ?",
         (fmt(now()),),
     )
     return [dict(r) for r in rows]
@@ -294,7 +307,7 @@ def prune_gcal(seen: set[str], start: str, end: str) -> int:
 def unsynced_events() -> list[dict]:
     """Open, dated, upcoming local events that never made it to Google Calendar."""
     rows = conn.execute(
-        "SELECT * FROM items WHERE kind='event' AND gcal_id IS NULL AND done=0 AND due_at >= ?",
+        "SELECT * FROM items WHERE kind='event' AND gcal_id IS NULL AND done=0 AND deleted_at IS NULL AND due_at >= ?",
         (fmt(now()),),
     )
     return [dict(r) for r in rows]

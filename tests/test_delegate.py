@@ -39,6 +39,7 @@ config.CLAUDE_PATH = _fake
 config.OPENCODE_PATH = _fake_oc
 config.AGENT_TIERS = {"cheap": ("opencode", "openai/gpt-6-luna"), "standard": ("claude", "sonnet"), "strong": ("claude", "opus")}
 config.AGENT_DEFAULT_TIER = "standard"
+config.AGENT_NEW_PROJECTS = os.path.join(_tmp, "new-projects")
 config.API_TOKEN = "secret-token"
 config.AGENT_WORKTREES = os.path.join(_tmp, "worktrees")
 config.AGENT_MAX_BUDGET_USD, config.AGENT_MONTHLY_BUDGET_USD = 5.0, 50.0
@@ -85,6 +86,12 @@ class DelegateTest(unittest.TestCase):
         app.attach("test", notify)
         os.environ["FAKE_CLAUDE"] = "ok"
         os.environ["FAKE_OPENCODE"] = "ok"
+        self.pr_bodies = []
+
+        async def fake_ensure(task, pr):
+            self.pr_bodies.append((task["id"], pr))
+        runner._ensure_pr_body = fake_ensure
+        config.AGENT_AUTO_RETRIES = 1
         for f in (_log, _oc_log):
             if os.path.exists(f):
                 os.remove(f)
@@ -92,16 +99,53 @@ class DelegateTest(unittest.TestCase):
 
     def delegate(self, **over) -> dict:
         args = {"objective": OBJECTIVE, "repository": "demo", **over}
-        out = run(REGISTRY.run("delegate_task", args, ToolContext()))
-        self.assertIn("Queued task #", out)
+        out = run(REGISTRY.run("open_ticket", args, ToolContext()))
+        self.assertIn("Queued ticket #", out)
         return store.list_tasks()[0]
 
     def test_schema_lists_repositories(self):
-        schema = REGISTRY.get("delegate_task").schema()["function"]["parameters"]
+        schema = REGISTRY.get("open_ticket").schema()["function"]["parameters"]
         self.assertEqual(schema["properties"]["repository"]["enum"], ["demo"])
         self.assertEqual(schema["properties"]["worker"]["enum"], ["cheap", "standard", "strong"])
-        self.assertEqual(schema["required"], ["objective", "repository"])
-        self.assertIn("delegate_task", [t.name for t in REGISTRY.available(ToolContext())])
+        self.assertEqual(schema["required"], ["objective"])
+        self.assertIn("open_ticket", [t.name for t in REGISTRY.available(ToolContext())])
+
+    def test_unknown_repository_is_refused(self):
+        out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE, "repository": "other"}, ToolContext()))
+        self.assertIn("unknown", out)
+        self.assertEqual(store.list_tasks(), [])
+        config.AGENT_NEW_PROJECTS = ""
+        try:
+            out = run(REGISTRY.run("open_ticket", {"objective": OBJECTIVE}, ToolContext()))
+            self.assertIn("new projects are off", out)
+            self.assertEqual(store.list_tasks(), [])
+        finally:
+            config.AGENT_NEW_PROJECTS = os.path.join(_tmp, "new-projects")
+
+    def test_no_repository_starts_a_new_local_project(self):
+        out = run(REGISTRY.run("open_ticket", {"objective": "Build a terminal dashboard showing CPU, memory and GPU use for this server.",
+                                               "project_name": "Perf Dashboard"}, ToolContext()))
+        self.assertIn("new project 'perf-dashboard'", out)
+        t = store.list_tasks()[0]
+        self.assertEqual(t["repository"], "new:perf-dashboard")
+        run(drain())
+        t = store.get_task(t["id"])
+        path = os.path.join(_tmp, "new-projects", "perf-dashboard")
+        self.assertEqual((t["status"], t["worktree"], t["branch"]), ("completed", path, "main"))
+        self.assertTrue(os.path.isdir(os.path.join(path, ".git")))
+        call = calls()[0]
+        self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(path))
+        system = call["argv"][call["argv"].index("--append-system-prompt") + 1]
+        self.assertIn("NEW project", system)
+        self.assertIn("Do not push", system)
+        self.assertIn(path, self.sent[0])
+        self.assertIn("no remote yet", self.sent[0])
+        # closing keeps the folder
+        self.assertIn("is kept", run(skills.run_command(f"!close {t['id']}", ToolContext())))
+        self.assertTrue(os.path.isdir(path))
+        # a name derived from the objective when none is given
+        out = run(REGISTRY.run("open_ticket", {"objective": "Write a CLI that renames photos by EXIF date, in Python."}, ToolContext()))
+        self.assertIn("new project 'write-a-cli-that'", out)
 
     def test_run_completes_in_worktree_and_notifies(self):
         t = self.delegate()
@@ -115,10 +159,11 @@ class DelegateTest(unittest.TestCase):
         self.assertTrue(os.path.isdir(t["worktree"]))
         branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=t["worktree"],
                                 capture_output=True, text=True).stdout.strip()
-        self.assertEqual(branch, f"agent/task-{t['id']}")
+        self.assertEqual(branch, f"agent/{t['id']}-fix-pathfinding-bot-stops-walking")
+        self.assertEqual(t["branch"], branch)
         self.assertEqual(len(self.sent), 1)
         self.assertIn("pull/7", self.sent[0])
-        self.assertIn("👀 Task #", self.sent[0])
+        self.assertIn("👀 Ticket #", self.sent[0])
         call = calls()[0]
         self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(t["worktree"]))
         self.assertEqual(call["prompt"], OBJECTIVE)
@@ -126,6 +171,10 @@ class DelegateTest(unittest.TestCase):
             self.assertEqual(call["argv"][call["argv"].index(flag) + 1], value)
         self.assertNotIn("--resume", call["argv"])
         self.assertIn("Bash(gh pr merge*)", call["argv"])
+        system = call["argv"][call["argv"].index("--append-system-prompt") + 1]
+        self.assertIn(f"## little-buddy ticket #{t['id']} · demo · standard (sonnet)", system)
+        self.assertIn("under 70 characters", system)
+        self.assertEqual(self.pr_bodies, [(t["id"], "https://github.com/MrBubsters/demo/pull/7")])
         system_prompt = call["argv"][call["argv"].index("--append-system-prompt") + 1]
         self.assertIn("bug unrelated to the assigned task", system_prompt)
         self.assertIn("Create an issue in the GitHub repository", system_prompt)
@@ -133,10 +182,89 @@ class DelegateTest(unittest.TestCase):
         run_row = store.task_runs(t["id"])[0]
         self.assertEqual((run_row["status"], run_row["tools"], run_row["turns"]), ("completed", 2, 3))
 
+    def test_transient_error_is_retried_once(self):
+        os.environ["FAKE_CLAUDE"] = "transient"
+        t = self.delegate()
+        run(drain())
+        self.assertEqual(store.get_task(t["id"])["status"], "queued")
+        self.assertEqual(store.task_runs(t["id"])[0]["error"], "transient")
+        self.assertIn("Retrying automatically (1/1)", self.sent[0])
+        self.assertIn("TLS handshake", self.sent[0])
+        os.environ["FAKE_CLAUDE"] = "ok"
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual((t["status"], t["pr_url"]), ("awaiting_review", "https://github.com/MrBubsters/demo/pull/7"))
+        runs = store.task_runs(t["id"])
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(runs[1]["prompt"].startswith("[auto-retry 1]"))
+        self.assertIn(OBJECTIVE, runs[1]["prompt"])
+        argv = calls()[1]["argv"]
+        self.assertEqual(argv[argv.index("--resume") + 1], "sess-transient")
+        self.assertIn("👀 Ticket #", self.sent[1])
+
+    def test_transient_error_gives_up_after_the_retries(self):
+        os.environ["FAKE_CLAUDE"] = "transient"
+        t = self.delegate()
+        run(drain())
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "failed")
+        self.assertEqual(len(store.task_runs(t["id"])), 2)
+        self.assertIn("❌ Ticket #", self.sent[1])
+        self.assertIn("hiccup", self.sent[1])
+        run(drain())  # nothing more is queued
+        self.assertEqual(len(store.task_runs(t["id"])), 2)
+
+    def test_pr_body_header_merge(self):
+        t = {"id": 11, "repository": "little-buddy", "tier": "cheap", "model": "openai/gpt-6-luna",
+             "objective": "Escalate   unrelated bugs\nto issues."}
+        header = store.pr_header(t)
+        self.assertTrue(header.startswith("## little-buddy ticket #11 · little-buddy · cheap (openai/gpt-6-luna)"))
+        self.assertIn("> Escalate unrelated bugs to issues.", header)
+        self.assertIsNone(runner.merged_pr_body(t, header + "\n\n## Summary\nx"))
+        merged = runner.merged_pr_body(t, "## Summary\nAgent wrote this.")
+        self.assertTrue(merged.startswith(header))
+        self.assertTrue(merged.endswith("---\n\n## Summary\nAgent wrote this."))
+        self.assertEqual(runner.merged_pr_body(t, ""), header)
+        self.assertEqual(store.branch_name(t), "agent/11-escalate-unrelated-bugs-issues")
+
+    def test_large_stream_events_are_read(self):
+        """Issue #7: a tool call writing a big file produced a stream line past asyncio's 64 KiB default."""
+        os.environ["FAKE_CLAUDE"] = "big"
+        t = self.delegate()
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual((t["status"], t["pr_url"]), ("awaiting_review", "https://github.com/MrBubsters/demo/pull/7"))
+        r = store.task_runs(t["id"])[0]
+        self.assertEqual((r["status"], r["tools"], r["turns"], r["error"]), ("completed", 3, 3, None))
+        self.assertAlmostEqual(t["cost_usd"], 0.42)
+
+    def test_reader_failure_stops_the_worker(self):
+        """If the stream reader dies anyway, the worker is stopped and the run recorded, not left running."""
+        from skills.delegate import claude_code
+        os.environ["FAKE_CLAUDE"] = "sleep"
+        original = claude_code.STREAM_LIMIT
+        claude_code.STREAM_LIMIT = 64  # force the overrun on the first event
+        try:
+            t = self.delegate()
+            run(drain())
+        finally:
+            claude_code.STREAM_LIMIT = original
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "failed")
+        self.assertIn("lost the worker's output stream", store.task_runs(t["id"])[0]["result"])
+        self.assertIn("worker was stopped", self.sent[0])
+        self.assertEqual(claude_code.PROCESSES, {})
+        # the fake sleeps 30 s when left alone: the run finishing well under that proves it was killed
+        r = store.task_runs(t["id"])[0]
+        started, finished = r["started_at"], r["finished_at"]
+        from datetime import datetime
+        self.assertLess((datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds(), 20)
+
     def test_continue_resumes_session(self):
         t = self.delegate()
         run(drain())
-        out = run(REGISTRY.run("continue_task", {"task": t["id"], "message": "Also cover the lava case."}, ToolContext()))
+        out = run(REGISTRY.run("continue_ticket", {"ticket": t["id"], "message": "Also cover the lava case."}, ToolContext()))
         self.assertIn("resuming", out)
         run(drain())
         argv = calls()[1]["argv"]
@@ -158,7 +286,7 @@ class DelegateTest(unittest.TestCase):
         t2 = self.delegate()
         run(drain())
         self.assertEqual(store.get_task(t2["id"])["status"], "failed")
-        self.assertIn("❌ Task", self.sent[1])
+        self.assertIn("❌ Ticket", self.sent[1])
 
     def test_monthly_budget_blocks_new_runs(self):
         config.AGENT_MONTHLY_BUDGET_USD = 1.0
@@ -189,15 +317,15 @@ class DelegateTest(unittest.TestCase):
         t2 = store.get_task(t2["id"])
         self.assertEqual(t2["status"], "cancelled")
         self.assertEqual(store.task_runs(t2["id"])[0]["status"], "cancelled")
-        self.assertIn("🛑 Task", self.sent[-1])
+        self.assertIn("🛑 Ticket", self.sent[-1])
 
     def test_commands_and_context(self):
         t = self.delegate()
-        self.assertIn(f"task #{t['id']}", run(skills.run_command("!tasks", ToolContext())))
+        self.assertIn(f"ticket #{t['id']}", run(skills.run_command("!tickets", ToolContext())))
         self.assertIn("in progress", delegate.context(ToolContext(), "hi"))
         run(drain())
         self.assertIsNone(delegate.context(ToolContext(), "hi"))
-        self.assertIn("pull/7", run(skills.run_command(f"!task {t['id']}", ToolContext())))
+        self.assertIn("pull/7", run(skills.run_command(f"!ticket {t['id']}", ToolContext())))
         worktree = store.get_task(t["id"])["worktree"]
         self.assertTrue(os.path.isdir(worktree))
         self.assertIn("Closed", run(skills.run_command(f"!close {t['id']}", ToolContext())))
@@ -219,24 +347,29 @@ class DelegateTest(unittest.TestCase):
                 self.assertEqual((await c.get("/health")).status, 401)
                 self.assertEqual((await c.get("/health", headers={"Authorization": "Bearer nope"})).status, 401)
                 self.assertTrue((await (await c.get("/health", headers=AUTH)).json())["ok"])
-                r = await c.post("/tasks", json={"objective": "short", "repository": "demo"}, headers=AUTH)
+                r = await c.post("/tickets", json={"objective": "short", "repository": "demo"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
-                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "worker": "turbo"}, headers=AUTH)
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "project_name": "api-thing"}, headers=AUTH)
+                self.assertEqual(r.status, 201)
+                self.assertEqual((await r.json())["repository"], "new:api-thing")
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "nope"}, headers=AUTH)
                 self.assertEqual(r.status, 400)
-                r = await c.post("/tasks", json={"objective": OBJECTIVE, "repository": "demo", "worker": "strong"}, headers=AUTH)
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "demo", "worker": "turbo"}, headers=AUTH)
+                self.assertEqual(r.status, 400)
+                r = await c.post("/tickets", json={"objective": OBJECTIVE, "repository": "demo", "worker": "strong"}, headers=AUTH)
                 self.assertEqual(r.status, 201)
                 task = await r.json()
                 self.assertEqual((task["origin"], task["tier"], task["backend"], task["model"], task["status"]),
                                  ("api", "strong", "claude", "opus", "queued"))
-                r = await c.get(f"/tasks/{task['id']}", headers=AUTH)
+                r = await c.get(f"/tickets/{task['id']}", headers=AUTH)
                 self.assertEqual(len((await r.json())["runs"]), 1)
-                self.assertEqual(len(await (await c.get("/tasks", headers=AUTH)).json()), 1)
-                r = await c.post("/ask", json={"text": "!tasks"}, headers=AUTH)
-                self.assertIn(f"task #{task['id']}", (await r.json())["reply"])
-                r = await c.post(f"/tasks/{task['id']}/cancel", headers=AUTH)
+                self.assertEqual(len(await (await c.get("/tickets", headers=AUTH)).json()), 2)
+                r = await c.post("/ask", json={"text": "!tickets"}, headers=AUTH)
+                self.assertIn(f"ticket #{task['id']}", (await r.json())["reply"])
+                r = await c.post(f"/tickets/{task['id']}/cancel", headers=AUTH)
                 self.assertEqual(r.status, 200)
-                self.assertEqual((await (await c.get(f"/tasks/{task['id']}", headers=AUTH)).json())["status"], "cancelled")
-                self.assertEqual((await c.get("/tasks/999", headers=AUTH)).status, 404)
+                self.assertEqual((await (await c.get(f"/tickets/{task['id']}", headers=AUTH)).json())["status"], "cancelled")
+                self.assertEqual((await c.get("/tickets/999", headers=AUTH)).status, 404)
         run(go())
 
 
@@ -272,10 +405,29 @@ class OpenCodeTest(DelegateTest):
         self.assertEqual((r["status"], r["tools"], r["turns"]), ("completed", 1, 2))
         self.assertIn("cheap: openai/gpt-6-luna", self.sent[0])
 
+    def test_transient_error_is_retried_opencode(self):
+        os.environ["FAKE_OPENCODE"] = "transient"
+        t = self.delegate(worker="cheap")
+        run(drain())
+        self.assertEqual(store.task_runs(t["id"])[0]["error"], "transient")
+        self.assertEqual(store.get_task(t["id"])["status"], "queued")
+        os.environ["FAKE_OPENCODE"] = "ok"
+        run(drain())
+        self.assertEqual(store.get_task(t["id"])["status"], "awaiting_review")
+        self.assertIn("--session", oc_calls()[1]["argv"])
+
+    def test_large_stream_events_are_read_opencode(self):
+        os.environ["FAKE_OPENCODE"] = "big"
+        t = self.delegate(worker="cheap")
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "awaiting_review")
+        self.assertEqual((store.task_runs(t["id"])[0]["tools"], store.task_runs(t["id"])[0]["status"]), (2, "completed"))
+
     def test_continue_passes_session(self):
         t = self.delegate(worker="cheap")
         run(drain())
-        run(REGISTRY.run("continue_task", {"task": t["id"], "message": "Also fix the typos in CONTRIBUTING."}, ToolContext()))
+        run(REGISTRY.run("continue_ticket", {"ticket": t["id"], "message": "Also fix the typos in CONTRIBUTING."}, ToolContext()))
         run(drain())
         argv = oc_calls()[1]["argv"]
         self.assertEqual(argv[argv.index("--session") + 1], "ses_ok")
@@ -303,7 +455,7 @@ class OpenCodeTest(DelegateTest):
         original = runner._pr_for_branch
 
         async def fake_pr(task):
-            return f"https://github.com/MrBubsters/demo/pull/9" if task["branch"] == f"agent/task-{task['id']}" else None
+            return "https://github.com/MrBubsters/demo/pull/9" if task["branch"] == store.branch_name(task) else None
         runner._pr_for_branch = fake_pr
         try:
             t = self.delegate(worker="cheap")

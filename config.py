@@ -134,6 +134,8 @@ def _tiers(spec: str) -> dict[str, tuple[str, str]]:
 
 # Repositories a Claude Code agent may work in, as name=path pairs. Empty = delegation off.
 AGENT_REPOS = _repos(os.getenv("AGENT_REPOS", ""))
+# Folder where tickets without a repository start a NEW local git project (empty = such tickets are refused).
+AGENT_NEW_PROJECTS = os.path.expanduser(os.getenv("AGENT_NEW_PROJECTS", ""))
 # Path to the Claude Code CLI (services don't get your shell's PATH).
 CLAUDE_PATH = os.getenv("CLAUDE_PATH", "") or _find("claude")
 # Path to the OpenCode CLI (used by tiers with the "opencode" backend).
@@ -148,6 +150,8 @@ AGENT_MONTHLY_BUDGET_USD = float(os.getenv("AGENT_MONTHLY_BUDGET_USD", "50"))  #
 AGENT_MAX_CONCURRENT = int(os.getenv("AGENT_MAX_CONCURRENT", "1"))
 AGENT_PERMISSION_MODE = os.getenv("AGENT_PERMISSION_MODE", "auto")
 AGENT_TIMEOUT_MINUTES = int(os.getenv("AGENT_TIMEOUT_MINUTES", "45"))
+# How many times a run interrupted by a transient error (network, TLS, provider 5xx, rate limit) is resumed on its own.
+AGENT_AUTO_RETRIES = int(os.getenv("AGENT_AUTO_RETRIES", "1"))
 # Where per-task git worktrees are created (outside the repositories themselves).
 AGENT_WORKTREES = os.path.expanduser(os.getenv("AGENT_WORKTREES", "~/.cache/little-buddy/worktrees"))
 

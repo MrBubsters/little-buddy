@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stand-in for the `opencode` CLI in tests: emits the JSON events `opencode run --format json` prints.
 
-FAKE_OPENCODE picks the scenario: ok (default) | auth | denied | expensive.
+FAKE_OPENCODE picks the scenario: ok (default) | auth | denied | expensive | big.
 FAKE_OPENCODE_LOG, if set, gets one JSON line per invocation with argv, cwd and the stdin prompt.
 """
 import json
@@ -31,6 +31,9 @@ def step_finish(cost):
 if scenario == "auth":
     emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {"message": "401 Incorrect API key provided"}}})
     sys.exit(1)
+if scenario == "transient":
+    emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {"message": "fetch failed: ECONNRESET"}}})
+    sys.exit(1)
 if scenario == "credits":
     emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {
           "message": "You have no credits remaining. Add credits to continue using the API."}}})
@@ -38,6 +41,10 @@ if scenario == "credits":
 emit({"type": "step_start", "sessionID": sid, "part": {"type": "step-start", "messageID": msg}})
 emit({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "bash", "messageID": msg,
       "state": {"status": "completed", "input": {"command": "npm test"}}}})
+if scenario == "big":  # a tool event far beyond asyncio's default 64 KiB line limit
+    emit({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "write", "messageID": msg,
+          "state": {"status": "completed", "input": {"filePath": "data/big.json", "content": "x" * (300 * 1024)}}}})
+    scenario = "ok"
 if scenario == "denied":
     emit({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "bash", "messageID": msg,
           "state": {"status": "error", "input": {"command": "gh pr merge 7"},

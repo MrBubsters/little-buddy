@@ -12,7 +12,7 @@ import json
 import re
 
 import config
-from skills.delegate.claude_code import PROCESSES, Outcome, environment, stop
+from skills.delegate.claude_code import PROCESSES, STREAM_LIMIT, TRANSIENT, Outcome, environment, stop
 
 _AUTH = re.compile(r"\b401\b|unauthorized|invalid api key|incorrect api key|authentication|no api key|missing api key", re.I)
 _LIMIT = re.compile(r"\b429\b|rate limit|quota|too many requests|overloaded|no credits|insufficient[_ ]quota|billing", re.I)
@@ -33,7 +33,8 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
     out = Outcome()
     proc = await asyncio.create_subprocess_exec(
         *command(model=model, cwd=cwd, resume=resume), cwd=cwd, env=environment(),
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        limit=STREAM_LIMIT)
     PROCESSES[key] = proc
     # OpenCode has no system-prompt flag: the brief carries its own instructions.
     proc.stdin.write(f"{system_prompt}\n\n---\n\n{prompt}".encode())
@@ -83,7 +84,7 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
                 err = ev.get("error") or {}
                 errors.append(str((err.get("data") or {}).get("message") or err.get("name") or err))
 
-    timed_out = False
+    timed_out, reader_error = False, None
     try:
         await asyncio.wait_for(asyncio.gather(read_out(), read_err(), proc.wait()), timeout_s)
     except asyncio.TimeoutError:
@@ -94,14 +95,24 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
         await stop(key)
         await proc.wait()
         raise
+    except Exception as e:  # noqa: BLE001 - a reader failure must not leave the worker running unrecorded
+        reader_error = f"{e.__class__.__name__}: {e}"
+        await stop(key)
+        await proc.wait()
     finally:
+        if proc.returncode is None:
+            await stop(key)
+            await proc.wait()
         PROCESSES.pop(key, None)
 
     out.exit_code = proc.returncode
     out.stderr = b"".join(stderr_chunks).decode(errors="replace")[-4000:]
     out.text = "".join(texts.get(last_message, [])).strip() if last_message else ""
     blob = "\n".join(errors) + "\n" + out.stderr
-    if timed_out:
+    if reader_error:
+        out.error_kind = "error"
+        out.text = f"The assistant lost the worker's output stream ({reader_error}); the worker was stopped."
+    elif timed_out:
         out.error_kind = "timeout"
     elif over_budget:
         out.error_kind = "budget"
@@ -111,6 +122,8 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
         out.error_kind = "auth"
     elif (errors or not out.text) and _LIMIT.search(blob):
         out.error_kind = "limit"
+    elif (errors or proc.returncode) and TRANSIENT.search(blob):
+        out.error_kind = "transient"
     elif errors or proc.returncode or not out.text:
         out.error_kind = "error"  # retried provider errors in stderr don't count when an answer came back
     out.ok = out.error_kind is None
