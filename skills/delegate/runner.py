@@ -21,6 +21,11 @@ and open a pull request against {base} with `gh pr create` (write a proper title
 force-push, never touch other branches.
 If the task is impossible, unsafe or too ambiguous, stop and say what you need instead of guessing. If a \
 discord_ask tool is available you may use it for one essential question.
+While working, if you find a clear bug unrelated to the assigned task, do not expand the code changes to fix it. \
+Create an issue in the GitHub repository where the bug lives, with a concise title, evidence or reproduction steps, \
+and impact. Identify the correct repository from its git remote and check for an existing issue first. If you cannot \
+identify the repository or create the issue, report the bug and the blocker without claiming a ticket was filed. \
+Include any created issue URL in your final summary. Bugs that are necessary to complete the assigned task remain in scope.
 Your final message is sent to {owner} as-is: a short summary (Discord markdown, under 1500 characters) of what \
 you found, what you changed, how you verified it, and the PR URL."""
 

@@ -126,6 +126,10 @@ class DelegateTest(unittest.TestCase):
             self.assertEqual(call["argv"][call["argv"].index(flag) + 1], value)
         self.assertNotIn("--resume", call["argv"])
         self.assertIn("Bash(gh pr merge*)", call["argv"])
+        system_prompt = call["argv"][call["argv"].index("--append-system-prompt") + 1]
+        self.assertIn("bug unrelated to the assigned task", system_prompt)
+        self.assertIn("Create an issue in the GitHub repository", system_prompt)
+        self.assertIn("Include any created issue URL", system_prompt)
         run_row = store.task_runs(t["id"])[0]
         self.assertEqual((run_row["status"], run_row["tools"], run_row["turns"]), ("completed", 2, 3))
 
@@ -262,6 +266,7 @@ class OpenCodeTest(DelegateTest):
         self.assertEqual(os.path.realpath(call["argv"][call["argv"].index("--dir") + 1]), os.path.realpath(t["worktree"]))
         self.assertTrue(call["prompt"].endswith(OBJECTIVE))
         self.assertIn("pull request", call["prompt"])  # the brief carries the instructions
+        self.assertIn("Create an issue in the GitHub repository", call["prompt"])
         self.assertNotIn("--session", call["argv"])
         r = store.task_runs(t["id"])[0]
         self.assertEqual((r["status"], r["tools"], r["turns"]), ("completed", 1, 2))
