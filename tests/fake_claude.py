@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stand-in for the `claude` CLI in tests: emits a scripted stream-json session.
 
-FAKE_CLAUDE picks the scenario: ok (default) | error | auth | sleep.
+FAKE_CLAUDE picks the scenario: ok (default) | error | auth | sleep | big.
 FAKE_CLAUDE_LOG, if set, gets one JSON line per invocation with argv, cwd and the prompt.
 """
 import json
@@ -25,6 +25,10 @@ def emit(d):
 emit({"type": "system", "subtype": "init", "session_id": session})
 emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "npm test"}}]}})
 emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "src/nav.ts"}}]}})
+if scenario == "big":  # one event far beyond asyncio's default 64 KiB line limit (a large file write)
+    emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write",
+          "input": {"file_path": "data/big.json", "content": "x" * (300 * 1024)}}]}})
+    scenario = "ok"
 if scenario == "sleep":
     time.sleep(30)
 if scenario == "ok":

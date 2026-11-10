@@ -167,6 +167,39 @@ class DelegateTest(unittest.TestCase):
         run_row = store.task_runs(t["id"])[0]
         self.assertEqual((run_row["status"], run_row["tools"], run_row["turns"]), ("completed", 2, 3))
 
+    def test_large_stream_events_are_read(self):
+        """Issue #7: a tool call writing a big file produced a stream line past asyncio's 64 KiB default."""
+        os.environ["FAKE_CLAUDE"] = "big"
+        t = self.delegate()
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual((t["status"], t["pr_url"]), ("awaiting_review", "https://github.com/MrBubsters/demo/pull/7"))
+        r = store.task_runs(t["id"])[0]
+        self.assertEqual((r["status"], r["tools"], r["turns"], r["error"]), ("completed", 3, 3, None))
+        self.assertAlmostEqual(t["cost_usd"], 0.42)
+
+    def test_reader_failure_stops_the_worker(self):
+        """If the stream reader dies anyway, the worker is stopped and the run recorded, not left running."""
+        from skills.delegate import claude_code
+        os.environ["FAKE_CLAUDE"] = "sleep"
+        original = claude_code.STREAM_LIMIT
+        claude_code.STREAM_LIMIT = 64  # force the overrun on the first event
+        try:
+            t = self.delegate()
+            run(drain())
+        finally:
+            claude_code.STREAM_LIMIT = original
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "failed")
+        self.assertIn("lost the worker's output stream", store.task_runs(t["id"])[0]["result"])
+        self.assertIn("worker was stopped", self.sent[0])
+        self.assertEqual(claude_code.PROCESSES, {})
+        # the fake sleeps 30 s when left alone: the run finishing well under that proves it was killed
+        r = store.task_runs(t["id"])[0]
+        started, finished = r["started_at"], r["finished_at"]
+        from datetime import datetime
+        self.assertLess((datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds(), 20)
+
     def test_continue_resumes_session(self):
         t = self.delegate()
         run(drain())
@@ -309,6 +342,14 @@ class OpenCodeTest(DelegateTest):
         r = store.task_runs(t["id"])[0]
         self.assertEqual((r["status"], r["tools"], r["turns"]), ("completed", 1, 2))
         self.assertIn("cheap: openai/gpt-6-luna", self.sent[0])
+
+    def test_large_stream_events_are_read_opencode(self):
+        os.environ["FAKE_OPENCODE"] = "big"
+        t = self.delegate(worker="cheap")
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "awaiting_review")
+        self.assertEqual((store.task_runs(t["id"])[0]["tools"], store.task_runs(t["id"])[0]["status"]), (2, "completed"))
 
     def test_continue_passes_session(self):
         t = self.delegate(worker="cheap")

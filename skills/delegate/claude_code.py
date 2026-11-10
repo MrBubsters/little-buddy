@@ -17,6 +17,9 @@ from typing import Awaitable, Callable
 import config
 
 PROCESSES: dict[int, asyncio.subprocess.Process] = {}  # key -> live process, so a run can be stopped
+# One stream-json event is one line; a tool call that writes a large file can be hundreds of KB, far past
+# asyncio's default 64 KiB line limit ("Separator is found, but chunk is longer than limit").
+STREAM_LIMIT = 64 * 1024 * 1024
 
 DENIED = ["Bash(gh pr merge*)", "Bash(git push --force*)", "Bash(git push -f*)", "Bash(git reset --hard*)"]
 
@@ -89,7 +92,7 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
     proc = await asyncio.create_subprocess_exec(
         *command(model=model, budget_usd=budget_usd, system_prompt=system_prompt, resume=resume),
         cwd=cwd, env=environment(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE)
+        stderr=asyncio.subprocess.PIPE, limit=STREAM_LIMIT)
     PROCESSES[key] = proc
     proc.stdin.write(prompt.encode())
     await proc.stdin.drain()
@@ -122,7 +125,7 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
             elif ev.get("type") == "result":
                 result = ev
 
-    timed_out = False
+    timed_out, reader_error = False, None
     try:
         await asyncio.wait_for(asyncio.gather(read_out(), read_err(), proc.wait()), timeout_s)
     except asyncio.TimeoutError:
@@ -133,7 +136,14 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
         await stop(key)
         await proc.wait()
         raise
+    except Exception as e:  # noqa: BLE001 - a reader failure must not leave the worker running unrecorded
+        reader_error = f"{e.__class__.__name__}: {e}"
+        await stop(key)
+        await proc.wait()
     finally:
+        if proc.returncode is None:
+            await stop(key)
+            await proc.wait()
         PROCESSES.pop(key, None)
 
     out.exit_code = proc.returncode
@@ -145,7 +155,10 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
         out.denials = len(result.get("permission_denials") or [])
         out.session_id = result.get("session_id") or out.session_id
     is_error = bool(result and result.get("is_error"))
-    if timed_out:
+    if reader_error:
+        out.error_kind = "error"
+        out.text = f"The assistant lost the worker's output stream ({reader_error}); the worker was stopped."
+    elif timed_out:
         out.error_kind = "timeout"
     elif getattr(proc, "_stopped", False):
         out.error_kind = "stopped"
