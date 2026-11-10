@@ -26,6 +26,10 @@ DENIED = ["Bash(gh pr merge*)", "Bash(git push --force*)", "Bash(git push -f*)",
 _AUTH = re.compile(r"oauth token|not logged in|please run /login|authentication_error|invalid api key|expired", re.I)
 _LIMIT = re.compile(r"rate limit|usage limit|limit reached|too many requests|\b429\b|overloaded|out of extra usage", re.I)
 _BUDGET = re.compile(r"max(imum)? budget|budget (limit|exceeded|of \$)", re.I)
+# A hiccup between the worker and its provider: worth resuming, the work in the worktree is intact.
+TRANSIENT = re.compile(r"tls handshake|\bEPROTO\b|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|"
+                       r"fetch failed|network error|connection (reset|closed|error|refused)|terminated unexpectedly|"
+                       r"\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway time-?out", re.I)
 
 
 @dataclass
@@ -50,6 +54,7 @@ class Outcome:
             "limit": "The provider's usage, rate or credit limit was hit. Wait for it to reset, add credits, or use "
                      "another tier (`!continue <n> <message>` retries once that's sorted).",
             "budget": f"The run hit its ${config.AGENT_MAX_BUDGET_USD:.2f} budget before finishing.",
+            "transient": "A network or provider hiccup interrupted the run; the work so far is still in the worktree.",
             "timeout": f"The run exceeded {config.AGENT_TIMEOUT_MINUTES} minutes and was stopped.",
             "stopped": "The run was stopped.",
         }.get(self.error_kind or "", "")
@@ -82,6 +87,8 @@ def classify(text: str, stderr: str, is_error: bool, exit_code: int | None) -> s
         return "limit"
     if _BUDGET.search(blob):
         return "budget"
+    if (is_error or exit_code) and TRANSIENT.search(blob):
+        return "transient"
     return "error" if (is_error or exit_code) else None
 
 

@@ -58,11 +58,31 @@ def is_new_project(t: dict) -> bool:
     return str(t.get("repository", "")).startswith(NEW)
 
 
-def slug(text: str, fallback: str = "project") -> str:
+_STOPWORDS = {"a", "an", "the", "to", "for", "of", "in", "on", "and", "or", "with", "this", "that", "it", "is",
+              "be", "should", "please", "so", "into", "from", "by", "as", "at", "its", "our", "my", "your", "we", "i"}
+
+
+def slug(text: str, fallback: str = "project", words: int = 0, skip_stopwords: bool = False) -> str:
     """'Server Perf Dashboard!' -> 'server-perf-dashboard' (max 40 chars)."""
-    words = re.findall(r"[a-z0-9]+", text.lower())
-    out = "-".join(words)[:40].strip("-")
+    found = re.findall(r"[a-z0-9]+", text.lower())
+    if skip_stopwords:
+        found = [w for w in found if w not in _STOPWORDS] or found
+    if words:
+        found = found[:words]
+    out = "-".join(found)[:40].rstrip("-")
     return out or fallback
+
+
+def branch_name(t: dict) -> str:
+    """agent/11-escalate-unrelated-bugs-issues: the ticket number plus the gist of its objective."""
+    return f"agent/{t['id']}-{slug(t['objective'], 'ticket', words=5, skip_stopwords=True)}"
+
+
+def pr_header(t: dict) -> str:
+    """The block every ticket PR body starts with, so a PR can always be traced to its ticket."""
+    return (f"## little-buddy ticket #{t['id']} · {t['repository']} · {t['tier']} ({t['model']})\n"
+            f"> {' '.join(t['objective'].split())}\n\n"
+            f"_Opened by little-buddy. Follow up on Discord with `!continue {t['id']} <message>`._")
 
 
 def ts() -> str:

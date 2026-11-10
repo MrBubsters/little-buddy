@@ -150,6 +150,8 @@ AGENT_MONTHLY_BUDGET_USD = float(os.getenv("AGENT_MONTHLY_BUDGET_USD", "50"))  #
 AGENT_MAX_CONCURRENT = int(os.getenv("AGENT_MAX_CONCURRENT", "1"))
 AGENT_PERMISSION_MODE = os.getenv("AGENT_PERMISSION_MODE", "auto")
 AGENT_TIMEOUT_MINUTES = int(os.getenv("AGENT_TIMEOUT_MINUTES", "45"))
+# How many times a run interrupted by a transient error (network, TLS, provider 5xx, rate limit) is resumed on its own.
+AGENT_AUTO_RETRIES = int(os.getenv("AGENT_AUTO_RETRIES", "1"))
 # Where per-task git worktrees are created (outside the repositories themselves).
 AGENT_WORKTREES = os.path.expanduser(os.getenv("AGENT_WORKTREES", "~/.cache/little-buddy/worktrees"))
 

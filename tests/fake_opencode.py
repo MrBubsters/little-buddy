@@ -31,6 +31,9 @@ def step_finish(cost):
 if scenario == "auth":
     emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {"message": "401 Incorrect API key provided"}}})
     sys.exit(1)
+if scenario == "transient":
+    emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {"message": "fetch failed: ECONNRESET"}}})
+    sys.exit(1)
 if scenario == "credits":
     emit({"type": "error", "sessionID": sid, "error": {"name": "APIError", "data": {
           "message": "You have no credits remaining. Add credits to continue using the API."}}})

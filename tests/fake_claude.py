@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stand-in for the `claude` CLI in tests: emits a scripted stream-json session.
 
-FAKE_CLAUDE picks the scenario: ok (default) | error | auth | sleep | big.
+FAKE_CLAUDE picks the scenario: ok (default) | error | auth | sleep | big | transient.
 FAKE_CLAUDE_LOG, if set, gets one JSON line per invocation with argv, cwd and the prompt.
 """
 import json
@@ -33,6 +33,8 @@ if scenario == "sleep":
     time.sleep(30)
 if scenario == "ok":
     result, is_error = f"Fixed it and opened https://github.com/MrBubsters/demo/pull/7 for review.", False
+elif scenario == "transient":
+    result, is_error = "EPROTO: The TLS handshake failed. Does the server speak TLS on this port?", True
 elif scenario == "auth":
     result, is_error = "OAuth token has expired. Please run /login.", True
 else:

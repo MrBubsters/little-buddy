@@ -86,6 +86,12 @@ class DelegateTest(unittest.TestCase):
         app.attach("test", notify)
         os.environ["FAKE_CLAUDE"] = "ok"
         os.environ["FAKE_OPENCODE"] = "ok"
+        self.pr_bodies = []
+
+        async def fake_ensure(task, pr):
+            self.pr_bodies.append((task["id"], pr))
+        runner._ensure_pr_body = fake_ensure
+        config.AGENT_AUTO_RETRIES = 1
         for f in (_log, _oc_log):
             if os.path.exists(f):
                 os.remove(f)
@@ -153,7 +159,8 @@ class DelegateTest(unittest.TestCase):
         self.assertTrue(os.path.isdir(t["worktree"]))
         branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=t["worktree"],
                                 capture_output=True, text=True).stdout.strip()
-        self.assertEqual(branch, f"agent/task-{t['id']}")
+        self.assertEqual(branch, f"agent/{t['id']}-fix-pathfinding-bot-stops-walking")
+        self.assertEqual(t["branch"], branch)
         self.assertEqual(len(self.sent), 1)
         self.assertIn("pull/7", self.sent[0])
         self.assertIn("👀 Ticket #", self.sent[0])
@@ -164,12 +171,62 @@ class DelegateTest(unittest.TestCase):
             self.assertEqual(call["argv"][call["argv"].index(flag) + 1], value)
         self.assertNotIn("--resume", call["argv"])
         self.assertIn("Bash(gh pr merge*)", call["argv"])
+        system = call["argv"][call["argv"].index("--append-system-prompt") + 1]
+        self.assertIn(f"## little-buddy ticket #{t['id']} · demo · standard (sonnet)", system)
+        self.assertIn("under 70 characters", system)
+        self.assertEqual(self.pr_bodies, [(t["id"], "https://github.com/MrBubsters/demo/pull/7")])
         system_prompt = call["argv"][call["argv"].index("--append-system-prompt") + 1]
         self.assertIn("bug unrelated to the assigned task", system_prompt)
         self.assertIn("Create an issue in the GitHub repository", system_prompt)
         self.assertIn("Include any created issue URL", system_prompt)
         run_row = store.task_runs(t["id"])[0]
         self.assertEqual((run_row["status"], run_row["tools"], run_row["turns"]), ("completed", 2, 3))
+
+    def test_transient_error_is_retried_once(self):
+        os.environ["FAKE_CLAUDE"] = "transient"
+        t = self.delegate()
+        run(drain())
+        self.assertEqual(store.get_task(t["id"])["status"], "queued")
+        self.assertEqual(store.task_runs(t["id"])[0]["error"], "transient")
+        self.assertIn("Retrying automatically (1/1)", self.sent[0])
+        self.assertIn("TLS handshake", self.sent[0])
+        os.environ["FAKE_CLAUDE"] = "ok"
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual((t["status"], t["pr_url"]), ("awaiting_review", "https://github.com/MrBubsters/demo/pull/7"))
+        runs = store.task_runs(t["id"])
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(runs[1]["prompt"].startswith("[auto-retry 1]"))
+        self.assertIn(OBJECTIVE, runs[1]["prompt"])
+        argv = calls()[1]["argv"]
+        self.assertEqual(argv[argv.index("--resume") + 1], "sess-transient")
+        self.assertIn("👀 Ticket #", self.sent[1])
+
+    def test_transient_error_gives_up_after_the_retries(self):
+        os.environ["FAKE_CLAUDE"] = "transient"
+        t = self.delegate()
+        run(drain())
+        run(drain())
+        t = store.get_task(t["id"])
+        self.assertEqual(t["status"], "failed")
+        self.assertEqual(len(store.task_runs(t["id"])), 2)
+        self.assertIn("❌ Ticket #", self.sent[1])
+        self.assertIn("hiccup", self.sent[1])
+        run(drain())  # nothing more is queued
+        self.assertEqual(len(store.task_runs(t["id"])), 2)
+
+    def test_pr_body_header_merge(self):
+        t = {"id": 11, "repository": "little-buddy", "tier": "cheap", "model": "openai/gpt-6-luna",
+             "objective": "Escalate   unrelated bugs\nto issues."}
+        header = store.pr_header(t)
+        self.assertTrue(header.startswith("## little-buddy ticket #11 · little-buddy · cheap (openai/gpt-6-luna)"))
+        self.assertIn("> Escalate unrelated bugs to issues.", header)
+        self.assertIsNone(runner.merged_pr_body(t, header + "\n\n## Summary\nx"))
+        merged = runner.merged_pr_body(t, "## Summary\nAgent wrote this.")
+        self.assertTrue(merged.startswith(header))
+        self.assertTrue(merged.endswith("---\n\n## Summary\nAgent wrote this."))
+        self.assertEqual(runner.merged_pr_body(t, ""), header)
+        self.assertEqual(store.branch_name(t), "agent/11-escalate-unrelated-bugs-issues")
 
     def test_large_stream_events_are_read(self):
         """Issue #7: a tool call writing a big file produced a stream line past asyncio's 64 KiB default."""
@@ -348,6 +405,17 @@ class OpenCodeTest(DelegateTest):
         self.assertEqual((r["status"], r["tools"], r["turns"]), ("completed", 1, 2))
         self.assertIn("cheap: openai/gpt-6-luna", self.sent[0])
 
+    def test_transient_error_is_retried_opencode(self):
+        os.environ["FAKE_OPENCODE"] = "transient"
+        t = self.delegate(worker="cheap")
+        run(drain())
+        self.assertEqual(store.task_runs(t["id"])[0]["error"], "transient")
+        self.assertEqual(store.get_task(t["id"])["status"], "queued")
+        os.environ["FAKE_OPENCODE"] = "ok"
+        run(drain())
+        self.assertEqual(store.get_task(t["id"])["status"], "awaiting_review")
+        self.assertIn("--session", oc_calls()[1]["argv"])
+
     def test_large_stream_events_are_read_opencode(self):
         os.environ["FAKE_OPENCODE"] = "big"
         t = self.delegate(worker="cheap")
@@ -387,7 +455,7 @@ class OpenCodeTest(DelegateTest):
         original = runner._pr_for_branch
 
         async def fake_pr(task):
-            return f"https://github.com/MrBubsters/demo/pull/9" if task["branch"] == f"agent/task-{task['id']}" else None
+            return "https://github.com/MrBubsters/demo/pull/9" if task["branch"] == store.branch_name(task) else None
         runner._pr_for_branch = fake_pr
         try:
             t = self.delegate(worker="cheap")

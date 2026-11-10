@@ -80,6 +80,16 @@ cd ~/minecraft-ai && echo "say hi" | ~/.local/bin/claude -p --output-format json
 Statuses: `queued → running → awaiting_review` (a PR exists) or `completed` (no PR), `failed`,
 `cancelled`, `closed`.
 
+**Branches and PRs.** Each ticket works on `agent/<ticket>-<gist-of-the-objective>` (for example
+`agent/11-escalate-unrelated-bugs-issues`). Every PR body starts with the same header, which the bot adds if
+the agent left it out: the ticket number, repository, tier and model, the request as you phrased it, and
+how to follow up. The agent writes the title (short, imperative) and the Summary / Changes / Verification
+sections below the header.
+
+**Interruptions.** A run cut short by a network, TLS or provider error is resumed on its own
+up to `AGENT_AUTO_RETRIES` times (default 1): the agent is told to check the worktree and continue, with
+its session resumed. You see one "interrupted, retrying" message and then the normal result.
+
 Tickets are deliberately not called tasks: planner to-dos are "tasks"/"items" (#30), coding tickets are
 "tickets" (#3), and scheduled jobs are "jobs". The model is told to ask when a number is ambiguous.
 
@@ -128,6 +138,7 @@ bearer token: keep it on your LAN or behind an SSH tunnel.
 | `AGENT_MAX_BUDGET_USD` / `AGENT_MONTHLY_BUDGET_USD` | Per run (enforced by Claude Code) / per month (checked before each run). |
 | `AGENT_MAX_CONCURRENT` | Parallel runs. Keep 1 on a Pro plan. |
 | `AGENT_TIMEOUT_MINUTES` | A run is stopped after this long. |
+| `AGENT_AUTO_RETRIES` | Automatic resumes after a transient error (network, TLS, provider 5xx). Auth, budget and credit problems are never retried. |
 | `AGENT_PERMISSION_MODE` | Claude Code permission mode for unattended runs (`auto`, `acceptEdits`, `bypassPermissions`, `dontAsk`). Denied tool calls are counted in the result. |
 | `AGENT_WORKTREES` | Where worktrees live (default `~/.cache/little-buddy/worktrees`). |
 | `API_TOKEN`, `API_HOST`, `API_PORT` | The HTTP API for `buddyctl.py`. Off unless the token is set. |

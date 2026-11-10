@@ -12,7 +12,7 @@ import json
 import re
 
 import config
-from skills.delegate.claude_code import PROCESSES, STREAM_LIMIT, Outcome, environment, stop
+from skills.delegate.claude_code import PROCESSES, STREAM_LIMIT, TRANSIENT, Outcome, environment, stop
 
 _AUTH = re.compile(r"\b401\b|unauthorized|invalid api key|incorrect api key|authentication|no api key|missing api key", re.I)
 _LIMIT = re.compile(r"\b429\b|rate limit|quota|too many requests|overloaded|no credits|insufficient[_ ]quota|billing", re.I)
@@ -122,6 +122,8 @@ async def run(prompt: str, cwd: str, *, model: str, budget_usd: float, system_pr
         out.error_kind = "auth"
     elif (errors or not out.text) and _LIMIT.search(blob):
         out.error_kind = "limit"
+    elif (errors or proc.returncode) and TRANSIENT.search(blob):
+        out.error_kind = "transient"
     elif errors or proc.returncode or not out.text:
         out.error_kind = "error"  # retried provider errors in stderr don't count when an answer came back
     out.ok = out.error_kind is None
