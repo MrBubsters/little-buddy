@@ -170,6 +170,33 @@ class AgentTest(unittest.TestCase):
         self.assertIn("System check", fake.calls[1]["messages"][-1]["content"])
         self.assertIn("-# ✔ Done:", reply)
 
+    def test_receipts_are_kept_out_of_model_history(self):
+        """The model copied old '-# ✔ Done:' lines and 'closed' tasks without calling a tool (ticket #15)."""
+        db.add_message("user", "close task 14", "r")
+        db.add_message("assistant", "Closed it.\n-# ✔ Done: 💼 #14 [task/work] Go links ✅", "r")
+        msgs, _ = run(agent.build_messages("list my tasks", ToolContext(conversation="r")))
+        self.assertEqual(msgs[2]["content"], "Closed it.")
+        self.assertFalse(any("-# ✔" in (m["content"] or "") for m in msgs))
+
+    def test_fake_receipts_are_stripped_and_nudged(self):
+        run(REGISTRY.run("add_item", {"title": "Update go links", "kind": "task", "category": "work"}, ToolContext()))
+        fake = FakeLLM(Reply("Sure thing!\n-# ✔ Closed: 💼 #14 [task/work] Update go links ✅"),
+                       Reply("", [call("complete_item", item="go links")]),
+                       Reply("Done, go links is closed."))
+        llm.set_provider(fake)
+        reply = run(agent.chat("close the go links task", ToolContext(conversation="f")))
+        self.assertIn("System check", fake.calls[1]["messages"][-1]["content"])
+        self.assertNotIn("Closed:", reply)
+        self.assertIn("-# ✔ Done:", reply)
+
+    def test_claim_still_unbacked_after_nudge_is_flagged(self):
+        fake = FakeLLM(Reply("I've closed tasks #14 and #15."), Reply("I've closed tasks #14 and #15."))
+        llm.set_provider(fake)
+        reply = run(agent.chat("close 14 and 15", ToolContext(conversation="u")))
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIn("Nothing was changed", reply)
+        self.assertNotIn("-# ✔", reply)
+
     def test_no_claim_nudge_for_logged_checkin_or_plain_reply(self):
         for text, answer in (("[work update logged] shipped it", "I've logged it, nice work!"), ("hi", "Hey!")):
             fake = FakeLLM(Reply(answer))
